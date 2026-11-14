@@ -1683,7 +1683,6 @@ export default function SpotifyLibraryModal({
                                                 alignItems: "center",
                                                 gap: "2px",
                                                 marginBottom: "8px",
-                                                flexWrap: "wrap",
                                             }}
                                         >
                                             {breadcrumbPath.map(
@@ -1713,6 +1712,7 @@ export default function SpotifyLibraryModal({
                                                             }}
                                                             style={{
                                                                 flex: "0 0 auto",
+                                                                alignItems: "center",
                                                             }}
                                                         >
                                                             <button
@@ -1742,6 +1742,7 @@ export default function SpotifyLibraryModal({
                                                                         isLast
                                                                             ? 1
                                                                             : 0.7,
+                                                                    lineHeight: 1,
                                                                 }}
                                                             >
                                                                 {item.name}
@@ -1754,6 +1755,7 @@ export default function SpotifyLibraryModal({
                                                                             "12px",
                                                                         padding:
                                                                             "0 4px",
+                                                                        lineHeight: 1,
                                                                     }}
                                                                 >
                                                                     /
