@@ -691,14 +691,9 @@ export default function SpotifyLibraryModal({
             setContentLoading(false);
             return;
         }
-        // Build breadcrumb path: home -> ... -> current item
-        setBreadcrumbPath((prev) => {
-            // Don't add duplicate consecutive entries
-            if (prev.length > 0 && prev[prev.length - 1].uri === item.uri) {
-                return prev;
-            }
-            return [...prev, item];
-        });
+        // Reset breadcrumbs when opening from library sidebar or search
+        // (breadcrumb clicks call setBrowseItem directly, not openBrowseItem)
+        setBreadcrumbPath([HomeBrowseItem, item]);
         setContentLoading(!hasCachedTrackPage || forceRefresh);
         try {
             if (item.entity_type === "playlist") {
