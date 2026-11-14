@@ -6,6 +6,8 @@ import {
     TextField,
 } from "@decky/ui";
 import { useEffect, useState } from "react";
+import SpotifyAuth from "./SpotifyAuth";
+void SpotifyAuth;
 import {
     cancelWebApiAuth,
     cancelPairing,

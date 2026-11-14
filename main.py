@@ -1,9 +1,15 @@
+import os
+import sys
+import socket
+
+plugin_dir = os.path.dirname(os.path.realpath(__file__))
+sys.path.append(os.path.join(plugin_dir, "py_modules"))
+
 import asyncio
 import base64
 import gzip
 import hashlib
 import json
-import os
 import secrets
 import shutil
 import signal
@@ -15,7 +21,10 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from aiohttp import web
 from collections import deque
+
+from spotapi import AsyncClient
 
 # The decky plugin module is located at decky-loader/plugin
 # For easy intellisense checkout the decky-loader code repo
@@ -43,6 +52,10 @@ WEB_API_CACHE_FILE = os.path.join(
 DEFAULT_DEVICE_NAME = "solodeck"
 WEB_API_CACHE_TTL = 30 * 24 * 60 * 60
 WEB_API_CACHE_MAX_ENTRIES = 500
+
+# Spotify API (spotapi) authentication via QR code
+SPOTIFY_AUTH_PORT = 8765
+SPOTIFY_COOKIE_SETTING_KEY = "spotify_cookie"
 WEB_API_CALLBACK_PORT = 48256
 
 # Library precache cache (gzip JSON). Populated proactively by
@@ -136,6 +149,10 @@ class Plugin:
         self._web_api_token_lock = asyncio.Lock()
         self._web_api_library_cache: dict | None = None
         self._web_api_library_cache_lock = asyncio.Lock()
+
+        # Spotify API (spotapi) QR auth server
+        self._auth_runner: web.AppRunner | None = None
+        self._auth_server_task: asyncio.Task | None = None
 
     # Where soloist is expected to live after the user downloads it.
     async def get_soloist_status(self) -> dict:
@@ -651,6 +668,195 @@ class Plugin:
         except (urllib.error.URLError, RuntimeError, ValueError, KeyError) as error:
             decky.logger.warning(f"Spotify album request failed: {error}")
             return {"ok": False, "error": str(error)}
+
+    # --- Spotify API (spotapi) QR authentication ---------------------------
+
+    async def start_qr_auth(self) -> str:
+        """Start a local HTTP server for Spotify QR-code authentication.
+
+        Returns the HTTP URL the user should open on their phone.
+        """
+        await self.stop_qr_auth()
+
+        # Pick a port: try 8765 first, then fall back to a free port.
+        port = SPOTIFY_AUTH_PORT
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            sock.bind(("0.0.0.0", port))
+        except OSError:
+            sock.bind(("0.0.0.0", 0))
+            port = sock.getsockname()[1]
+        finally:
+            sock.close()
+
+        # Determine the local LAN IP address.
+        probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            probe.connect(("8.8.8.8", 80))
+            local_ip = probe.getsockname()[0]
+        except Exception:
+            local_ip = "127.0.0.1"
+        finally:
+            probe.close()
+
+        app = web.Application()
+        app.router.add_get("/", self._handle_auth_get)
+        app.router.add_post("/submit", self._handle_auth_submit)
+
+        self._auth_runner = web.AppRunner(app)
+        await self._auth_runner.setup()
+        site = web.TCPSite(self._auth_runner, "0.0.0.0", port)
+        await site.start()
+
+        url = f"http://{local_ip}:{port}"
+        decky.logger.info(f"Spotify QR auth server started at {url}")
+        return url
+
+    async def stop_qr_auth(self) -> None:
+        """Stop the local HTTP auth server if running."""
+        if self._auth_runner is not None:
+            try:
+                await self._auth_runner.cleanup()
+            except Exception as error:
+                decky.logger.warning(
+                    f"Error stopping auth server: {error}"
+                )
+            self._auth_runner = None
+        self._auth_server_task = None
+
+    async def get_auth_status(self) -> bool:
+        """Return True if a Spotify cookie is saved in settings."""
+        settings = self._load_settings()
+        return bool(settings.get(SPOTIFY_COOKIE_SETTING_KEY))
+
+    async def logout_spotify(self) -> dict:
+        """Remove the saved Spotify cookie."""
+        settings = self._load_settings()
+        if SPOTIFY_COOKIE_SETTING_KEY in settings:
+            del settings[SPOTIFY_COOKIE_SETTING_KEY]
+            self._save_settings(settings)
+        await self.stop_qr_auth()
+        return {"ok": True}
+
+    async def _handle_auth_get(self, request: web.Request) -> web.Response:
+        """Serve the QR-code login form."""
+        html = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Spotify Login</title>
+<style>
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #121212; color: #fff; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; margin: 0; padding: 20px; box-sizing: border-box; }
+    h1 { color: #1ed760; font-size: 28px; margin-bottom: 8px; }
+    p { color: #a9a9a9; font-size: 16px; text-align: center; max-width: 400px; margin-bottom: 24px; }
+    form { display: flex; flex-direction: column; align-items: center; gap: 16px; width: 100%; max-width: 400px; }
+    input { width: 100%; padding: 14px; border-radius: 4px; border: none; background: #1a1a1a; color: #fff; font-size: 16px; box-sizing: border-box; }
+    button { width: 100%; padding: 14px; border-radius: 4px; border: none; background: #1ed760; color: #000; font-size: 16px; font-weight: 700; cursor: pointer; }
+    button:hover { background: #1ed15c; }
+    .hint { font-size: 13px; color: #666; margin-top: 16px; text-align: center; }
+    .hint a { color: #1ed760; text-decoration: none; }
+    .hint a:hover { text-decoration: underline; }
+</style>
+</head>
+<body>
+<h1>Spotify</h1>
+<p>Paste your Spotify <code>sp_dc</code> cookie below to log in.</p>
+<p class="hint">Get it from <a href="https://open.spotify.com" target="_blank">open.spotify.com</a> in your browser's DevTools (Application → Cookies → sp_dc).</p>
+<form id="form" method="post" action="/submit">
+    <input type="text" name="sp_dc" placeholder="sp_dc=..." required autocomplete="off" autocorrect="off" spellcheck="false">
+    <button type="submit">Sign In</button>
+</form>
+<script>
+document.getElementById('form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const formData = new FormData(e.target);
+    const sp_dc = formData.get('sp_dc');
+    const cookie = sp_dc.startsWith('sp_dc=') ? sp_dc : 'sp_dc=' + sp_dc;
+    formData.set('sp_dc', cookie);
+    const res = await fetch('/submit', { method: 'POST', body: formData });
+    if (res.ok) {
+        document.body.innerHTML = '<div style="text-align:center; color:#1ed760; font-size:20px;"><h1 style="color:#1ed760;">Signed in!</h1><p>You can close this page and return to the Deck.</p></div>';
+    } else {
+        const text = await res.text();
+        alert('Login failed: ' + text);
+    }
+});
+</script>
+</body>
+</html>"""
+        return web.Response(text=html, content_type="text/html")
+
+    async def _handle_auth_submit(self, request: web.Request) -> web.Response:
+        """Handle the submitted sp_dc cookie and validate it."""
+        try:
+            form = await request.post()
+        except Exception:
+            return web.Response(
+                text="Invalid form data.", status=400, content_type="text/html"
+            )
+
+        cookie = form.get("sp_dc", "")
+        if not isinstance(cookie, str) or not cookie.strip():
+            return web.Response(
+                text="Missing sp_dc cookie.", status=400, content_type="text/html"
+            )
+
+        cookie = cookie.strip()
+        if not cookie.startswith("sp_dc="):
+            cookie = "sp_dc=" + cookie
+
+        # Validate by creating a spotapi client (this validates the cookie).
+        try:
+            client = await AsyncClient.from_cookies(cookie)
+            await client.close()
+        except Exception as error:
+            decky.logger.warning(f"Spotify cookie validation failed: {error}")
+            return web.Response(
+                text="Invalid Spotify cookie. Please check and try again.",
+                status=400,
+                content_type="text/html",
+            )
+
+        # Save the cookie persistently.
+        settings = self._load_settings()
+        settings[SPOTIFY_COOKIE_SETTING_KEY] = cookie
+        self._save_settings(settings)
+
+        # Notify the frontend that auth succeeded.
+        try:
+            decky.emit("spotify_auth_success", True)
+        except Exception:
+            pass
+
+        # Stop the auth server after a short delay so the response can be sent.
+        asyncio.create_task(self._stop_after_delay())
+
+        html = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Signed In</title>
+<style>
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #121212; color: #fff; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; margin: 0; padding: 20px; box-sizing: border-box; }
+    h1 { color: #1ed760; font-size: 28px; margin-bottom: 8px; }
+    p { color: #a9a9a9; font-size: 16px; text-align: center; max-width: 400px; }
+</style>
+</head>
+<body>
+<h1 style="color:#1ed760;">Signed In!</h1>
+<p>You can close this page and return to the Deck.</p>
+</body>
+</html>"""
+        return web.Response(text=html, content_type="text/html")
+
+    async def _stop_after_delay(self) -> None:
+        """Stop the auth server after a short delay to allow the response to send."""
+        await asyncio.sleep(1)
+        await self.stop_qr_auth()
+
+    # --- End of Spotify API (spotapi) QR authentication --------------------
 
     async def search_web_api(self, query: str) -> dict:
         normalized_query = (query or "").strip()
@@ -1920,6 +2126,7 @@ class Plugin:
         decky.logger.info("Stopping solodeck")
         await self.cancel_pairing()
         await self.cancel_web_api_auth()
+        await self.stop_qr_auth()
         # Stop the process, but do not persist "daemon disabled": this also
         # runs on plugin reloads, after which the daemon should come back.
         await self._shutdown_daemon()

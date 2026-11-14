@@ -8,6 +8,7 @@ __pycache__/
 *.py[cod]
 .venv/
 venv/
+py_modules/*
 
 # Packaged plugin builds
 *.zip

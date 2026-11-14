@@ -12,6 +12,17 @@ shutil.rmtree('dist', ignore_errors=True)
 # 2. Run the Decky frontend compiler
 subprocess.run(['pnpm', 'build'], check=True)
 
+# 2b. Install spotapi into ./py_modules at build time only.
+#     Wheels are fetched for manylinux2014_x86_64 / Python 3.11 so the libs
+#     are bundled into the plugin zip instead of being pulled at runtime.
+subprocess.run([
+    'pip', 'install', 'spotapi',
+    '--target=./py_modules',
+    '--platform=manylinux2014_x86_64',
+    '--python-version=3.11',
+    '--only-binary=:all:',
+], check=True)
+
 # 3. Safely extract metadata (name & version) for zip naming
 plugin_name = "solodeck"
 plugin_base_version = "1.0"

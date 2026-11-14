@@ -1,0 +1,77 @@
+<svg xmlns="http://w3.org" viewBox="0 0 32 32" width="32" height="32">
+  <style>
+    .piece {
+      fill: #1db954;
+    }
+
+    .middle {
+      transform-box: fill-box;
+      transform-origin: bottom;
+      animation: stretch 0.8s ease-in-out infinite alternate;
+    }
+
+    .top-cap {
+      animation: moveCap 0.8s ease-in-out infinite alternate;
+    }
+
+    /* Stagger each bar's timing */
+    .bar-1 .middle, .bar-1 .top-cap {
+      animation-delay: 0s;
+    }
+
+    .bar-2 .middle, .bar-2 .top-cap {
+      animation-delay: -0.4s;
+    }
+
+    .bar-3 .middle, .bar-3 .top-cap {
+      animation-delay: -0.2s;
+    }
+
+    /* Middle bar scales up to its full 26px height */
+    @keyframes stretch {
+      0% {
+        transform: scaleY(0.05);
+      }
+      50% {
+        transform: scaleY(0.65);
+      }
+      100% {
+        transform: scaleY(1);
+      }
+    }
+
+    /* Top cap translates upward to stay flush with the middle bar */
+    @keyframes moveCap {
+      0% {
+        transform: translateY(-1.3px);
+      }
+      50% {
+        transform: translateY(-16.9px);
+      }
+      100% {
+        transform: translateY(-26px);
+      }
+    }
+  </style>
+
+  <!-- Bar 1 (x: 3 to 9, center: 6) -->
+  <g class="bar-1">
+    <circle class="piece bottom-cap" cx="6" cy="29" r="3" />
+    <rect class="piece middle" x="3" y="3" width="6" height="26" />
+    <circle class="piece top-cap" cx="6" cy="29" r="3" />
+  </g>
+
+  <!-- Bar 2 (x: 13 to 19, center: 16) -->
+  <g class="bar-2">
+    <circle class="piece bottom-cap" cx="16" cy="29" r="3" />
+    <rect class="piece middle" x="13" y="3" width="6" height="26" />
+    <circle class="piece top-cap" cx="16" cy="29" r="3" />
+  </g>
+
+  <!-- Bar 3 (x: 23 to 29, center: 26) -->
+  <g class="bar-3">
+    <circle class="piece bottom-cap" cx="26" cy="29" r="3" />
+    <rect class="piece middle" x="23" y="3" width="6" height="26" />
+    <circle class="piece top-cap" cx="26" cy="29" r="3" />
+  </g>
+</svg>

@@ -187,3 +187,10 @@ export const getDaemonStatus = callable<[], DaemonStatus>("get_daemon_status");
 export const startDaemon = callable<[], ActionResult>("start_daemon");
 export const stopDaemon = callable<[], ActionResult>("stop_daemon");
 export const restartDaemon = callable<[], ActionResult>("restart_daemon");
+
+export const startQrAuth = callable<[], { url?: string; error?: string }>(
+    "start_qr_auth",
+);
+export const stopQrAuth = callable<[], ActionResult>("stop_qr_auth");
+export const getAuthStatus = callable<[], { ok: boolean }>("get_auth_status");
+export const logoutSpotify = callable<[], ActionResult>("logout_spotify");
