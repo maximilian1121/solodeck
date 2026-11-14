@@ -657,7 +657,7 @@ export default function SpotifyLibraryModal({
         item: SpotifyBrowseItem,
         parentItem: SpotifyBrowseItem | null = null,
         forceRefresh = false,
-        resetBreadcrumbs: boolean | undefined = undefined,
+        resetBreadcrumbs = true,
     ) => {
         const requestId = ++contentRequestRef.current;
         const cachedPage = explorerCache.pages[item.uri];
@@ -694,12 +694,11 @@ export default function SpotifyLibraryModal({
             setBreadcrumbPath([]);
             return;
         }
-        // When on the browse page, append to breadcrumb trail (navigating
-        // within library content). When on home/search, start fresh.
-        const shouldReset = resetBreadcrumbs ?? page !== "browse";
-        if (shouldReset) {
+        if (resetBreadcrumbs) {
+            // Library sidebar, search, or home navigation - start fresh
             setBreadcrumbPath([item]);
         } else {
+            // Context menu navigation within browse content - append
             setBreadcrumbPath((prev) => {
                 if (prev.length > 0 && prev[prev.length - 1].uri === item.uri) {
                     return prev;
@@ -1090,20 +1089,30 @@ export default function SpotifyLibraryModal({
                     albumAvailable={Boolean(albumUri && albumName)}
                     onOpenAlbum={() => {
                         if (!albumUri || !albumName) return;
-                        void openBrowseItem({
-                            uri: albumUri,
-                            name: albumName,
-                            entity_type: "album",
-                            image_url: albumImage ?? null,
-                        });
+                        void openBrowseItem(
+                            {
+                                uri: albumUri,
+                                name: albumName,
+                                entity_type: "album",
+                                image_url: albumImage ?? null,
+                            },
+                            null,
+                            false,
+                            false,
+                        );
                     }}
                     onOpenArtist={(artist) =>
-                        void openBrowseItem({
-                            uri: artist.uri,
-                            name: artist.name,
-                            entity_type: "artist",
-                            image_url: null,
-                        })
+                        void openBrowseItem(
+                            {
+                                uri: artist.uri,
+                                name: artist.name,
+                                entity_type: "artist",
+                                image_url: null,
+                            },
+                            null,
+                            false,
+                            false,
+                        )
                     }
                 />,
                 menuParent,
@@ -1836,78 +1845,78 @@ export default function SpotifyLibraryModal({
                                                 {(browseItem.entity_type ===
                                                     "playlist" ||
                                                     browseItem.entity_type ===
-                                                        "album") && (
-                                                    <Focusable
-                                                        onActivate={() => {
-                                                            if (
-                                                                contentLoading ||
-                                                                refreshCooldownSeconds >
-                                                                    0
-                                                            ) {
-                                                                return;
-                                                            }
-                                                            void openBrowseItem(
-                                                                browseItem,
-                                                                parentBrowseItem,
-                                                                true,
-                                                            );
-                                                        }}
-                                                        style={{
-                                                            width: "auto",
-                                                        }}
-                                                    >
-                                                        <button
-                                                            type="button"
-                                                            tabIndex={-1}
-                                                            disabled={
-                                                                contentLoading ||
-                                                                refreshCooldownSeconds >
-                                                                    0
-                                                            }
-                                                            onClick={() =>
-                                                                contentLoading ||
-                                                                refreshCooldownSeconds >
-                                                                    0
-                                                                    ? undefined
-                                                                    : void openBrowseItem(
-                                                                          browseItem,
-                                                                          parentBrowseItem,
-                                                                          true,
-                                                                      )
-                                                            }
+                                                        "album") &&
+                                                    !(
+                                                        contentLoading ||
+                                                        refreshCooldownSeconds >
+                                                            0
+                                                    ) && (
+                                                        <Focusable
+                                                            onActivate={() => {
+                                                                void openBrowseItem(
+                                                                    browseItem,
+                                                                    parentBrowseItem,
+                                                                    true,
+                                                                );
+                                                            }}
                                                             style={{
-                                                                ...browseButtonStyle,
-                                                                ...quietMessageStyle,
-                                                                alignItems:
-                                                                    "center",
-                                                                display: "flex",
-                                                                gap: "6px",
-                                                                justifyContent:
-                                                                    "center",
-                                                                cursor:
-                                                                    contentLoading ||
-                                                                    refreshCooldownSeconds >
-                                                                        0
-                                                                        ? "default"
-                                                                        : "pointer",
-                                                                opacity:
-                                                                    contentLoading ||
-                                                                    refreshCooldownSeconds >
-                                                                        0
-                                                                        ? 0.6
-                                                                        : 1,
+                                                                width: "auto",
                                                             }}
                                                         >
-                                                            <FaSyncAlt aria-hidden="true" />
-                                                            {contentLoading
-                                                                ? "Refreshing..."
-                                                                : refreshCooldownSeconds >
-                                                                    0
-                                                                  ? `Refresh in ${refreshCooldownSeconds}s`
-                                                                  : "Refresh"}
-                                                        </button>
-                                                    </Focusable>
-                                                )}
+                                                            <button
+                                                                type="button"
+                                                                tabIndex={-1}
+                                                                disabled={
+                                                                    contentLoading ||
+                                                                    refreshCooldownSeconds >
+                                                                        0
+                                                                }
+                                                                onClick={() =>
+                                                                    contentLoading ||
+                                                                    refreshCooldownSeconds > 0
+                                                                        ? undefined
+                                                                        : void openBrowseItem(
+                                                                              browseItem,
+                                                                              parentBrowseItem,
+                                                                              true,
+                                                                      )
+                                                                }
+                                                                style={{
+                                                                    ...browseButtonStyle,
+                                                                    ...quietMessageStyle,
+                                                                    alignItems:
+                                                                        "center",
+                                                                    display:
+                                                                        "flex",
+                                                                    gap: "6px",
+                                                                    justifyContent:
+                                                                        "center",
+                                                                    cursor:
+                                                                        contentLoading ||
+                                                                        refreshCooldownSeconds >
+                                                                            0
+                                                                            ? "default"
+                                                                            : "pointer",
+                                                                    opacity:
+                                                                        contentLoading ||
+                                                                        refreshCooldownSeconds >
+                                                                            0
+                                                                            ? 0.6
+                                                                            : 1,
+                                                                }}
+                                                            >
+                                                                <FaSyncAlt
+                                                                    aria-hidden="true"
+                                                                />
+                                                                {contentLoading
+                                                                    ? "Refreshing..."
+                                                                    : refreshCooldownSeconds >
+                                                                        0
+                                                                      ? `Refresh in ${refreshCooldownSeconds}s`
+                                                                      : "Refresh"}
+                                                            </button>
+                                                        </Focusable>
+                                                    )}
                                             </div>
                                             <div
                                                 style={{
@@ -1959,71 +1968,6 @@ export default function SpotifyLibraryModal({
                                               ? "Tracks"
                                               : "Playlist tracks",
                                         detailsScrollRef,
-                                    )}
-                                    {(browseItem.entity_type === "playlist" ||
-                                        browseItem.entity_type === "album") && (
-                                        <Focusable
-                                            onActivate={() => {
-                                                if (
-                                                    contentLoading ||
-                                                    refreshCooldownSeconds > 0
-                                                ) {
-                                                    return;
-                                                }
-                                                void openBrowseItem(
-                                                    browseItem,
-                                                    parentBrowseItem,
-                                                    true,
-                                                );
-                                            }}
-                                            style={{ width: "100%" }}
-                                        >
-                                            <button
-                                                type="button"
-                                                tabIndex={-1}
-                                                disabled={
-                                                    contentLoading ||
-                                                    refreshCooldownSeconds > 0
-                                                }
-                                                onClick={() =>
-                                                    contentLoading ||
-                                                    refreshCooldownSeconds > 0
-                                                        ? undefined
-                                                        : void openBrowseItem(
-                                                              browseItem,
-                                                              parentBrowseItem,
-                                                              true,
-                                                          )
-                                                }
-                                                style={{
-                                                    ...browseButtonStyle,
-                                                    ...quietMessageStyle,
-                                                    alignItems: "center",
-                                                    display: "flex",
-                                                    gap: "8px",
-                                                    justifyContent: "center",
-                                                    cursor:
-                                                        contentLoading ||
-                                                        refreshCooldownSeconds >
-                                                            0
-                                                            ? "default"
-                                                            : "pointer",
-                                                    opacity:
-                                                        contentLoading ||
-                                                        refreshCooldownSeconds >
-                                                            0
-                                                            ? 0.6
-                                                            : 1,
-                                                }}
-                                            >
-                                                <FaSyncAlt aria-hidden="true" />
-                                                {contentLoading
-                                                    ? "Refreshing tracks..."
-                                                    : refreshCooldownSeconds > 0
-                                                      ? `Refresh available in ${refreshCooldownSeconds}s`
-                                                      : "Refresh tracks"}
-                                            </button>
-                                        </Focusable>
                                     )}
                                     {contentError && (
                                         <div
