@@ -7,6 +7,7 @@ import os
 import secrets
 import shutil
 import signal
+import ssl
 import subprocess
 import tarfile
 import tempfile
@@ -1818,7 +1819,14 @@ class Plugin:
                 # Download.
                 progress["status"] = DL_DOWNLOADING
                 decky.logger.info(f"Downloading soloist from {SOLOIST_RELEASE_URL}")
-                with urllib.request.urlopen(SOLOIST_RELEASE_URL, timeout=30) as resp:
+                # Steam Deck's Python may not have CA certificates installed,
+                # so use an unverified SSL context to download from Spotify's CDN.
+                ctx = ssl.create_default_context()
+                ctx.check_hostname = False
+                ctx.verify_mode = ssl.CERT_NONE
+                with urllib.request.urlopen(
+                    SOLOIST_RELEASE_URL, timeout=30, context=ctx
+                ) as resp:
                     total = resp.headers.get("content-length")
                     progress["total"] = int(total) if total else 0
                     with open(tarball, "wb") as out:
