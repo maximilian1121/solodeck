@@ -7,11 +7,13 @@ import {
     SliderField,
     ButtonItem,
     showModal,
+    showContextMenu,
     staticClasses,
 } from "@decky/ui";
 import {
     getTrackMetadata,
     playWebApiTrackInContext,
+    type SpotifyBrowseItem,
 } from "../api";
 import {
     FaCheckCircle,
@@ -22,16 +24,12 @@ import {
     FaRedo,
     FaStepBackward,
     FaStepForward,
+    FaVolumeUp,
 } from "react-icons/fa";
-import {
-    useEffect,
-    useRef,
-    useState,
-    type ReactNode,
-} from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import TrackDetailsFocusable, { type TrackItem } from "./TrackDetailsFocusable";
 import { updatePlaybackSnapshot } from "./playbackSnapshot";
-import SpotifyLibraryModal from "./SpotifyLibraryModal";
+import SpotifyLibraryModal, { TrackContextMenu } from "./SpotifyLibraryModal";
 
 const SOLOIST_WS_URL = "ws://127.0.0.1:35797";
 const STATE_REFRESH_INTERVAL_MS = 10_000;
@@ -116,7 +114,6 @@ function ActionControl({
                 minHeight: "48px",
                 flex: "0 0 48px",
                 padding: 0,
-                overflow: "hidden",
             }}
         >
             <Field
@@ -138,11 +135,13 @@ function ActionControl({
                         display: "flex",
                         alignItems: "center",
                         justifyContent: "center",
+                        flexDirection: "column",
+                        gap: "3px",
                         boxSizing: "border-box",
                         width: "48px",
                         height: "48px",
                         borderRadius: "8px",
-                        color: active ? "var(--gpColor-Blue)" : "inherit",
+                        color: active ? "#1ed760" : "inherit",
                         background: focused
                             ? "rgba(255, 255, 255, 0.16)"
                             : "transparent",
@@ -150,6 +149,17 @@ function ActionControl({
                     }}
                 >
                     {icon}
+                    {active && (
+                        <span
+                            aria-hidden="true"
+                            style={{
+                                background: "#1ed760",
+                                borderRadius: "50%",
+                                height: "4px",
+                                width: "4px",
+                            }}
+                        />
+                    )}
                 </div>
             </Field>
         </div>
@@ -304,6 +314,11 @@ export default function QamPanel() {
         null,
     );
     const [isDjPlayback, setIsDjPlayback] = useState(false);
+    const [deviceControlFocused, setDeviceControlFocused] = useState(false);
+    const [soloistDeviceName, setSoloistDeviceName] = useState("");
+    const [soloistIsActive, setSoloistIsActive] = useState<boolean | null>(
+        null,
+    );
     const [isLoggedIn, setIsLoggedIn] = useState(false);
     const [isPlaying, setIsPlaying] = useState(false);
     const [isShuffle, setIsShuffle] = useState(false);
@@ -482,6 +497,92 @@ export default function QamPanel() {
             });
     };
 
+    const openSpotifyLibrary = (initialBrowseItem?: SpotifyBrowseItem) => {
+        let modal: ReturnType<typeof showModal>;
+        modal = showModal(
+            <SpotifyLibraryModal
+                closeModal={() => modal.Close()}
+                initialBrowseItem={initialBrowseItem}
+                onPlayTrack={async (item, contextUri, position) => {
+                    if (contextUri && position !== undefined && item.uri) {
+                        return playWebApiTrackInContext(
+                            contextUri,
+                            item.uri,
+                            position,
+                        );
+                    }
+                    if (!item.uri) {
+                        return {
+                            ok: false,
+                            error: "This Spotify item cannot be played.",
+                        };
+                    }
+                    return sendCommand("play", { uri: item.uri })
+                        ? { ok: true }
+                        : {
+                              ok: false,
+                              error: "Soloist connection is unavailable.",
+                          };
+                }}
+            />,
+            window,
+            { strTitle: "solodeck", bNeverPopOut: true },
+        );
+    };
+
+    const openTrackContextMenu = (
+        item: TrackItem,
+        event: import("@decky/ui").GamepadEvent,
+    ) => {
+        const title =
+            item.decorations?.identity?.name ?? item.name ?? "Unknown track";
+        const artists = (item.decorations?.creators ?? [])
+            .map((creator) => {
+                const entity = creator.entity;
+                const identity = entity?.decorations?.identity;
+                const uri = entity?.uri ?? identity?.uri;
+                return typeof uri === "string" &&
+                    typeof identity?.name === "string"
+                    ? { uri, name: identity.name }
+                    : null;
+            })
+            .filter(
+                (artist): artist is { uri: string; name: string } =>
+                    artist !== null,
+            );
+        const album = item.decorations?.parent?.entity;
+        const albumUri = album?.uri;
+        const albumName = album?.decorations?.identity?.name;
+        const albumImage =
+            item.decorations?.visual_identity?.cover?.[0]?.url ?? null;
+
+        showContextMenu(
+            <TrackContextMenu
+                title={title}
+                artists={artists}
+                albumAvailable={Boolean(albumUri && albumName)}
+                onOpenAlbum={() => {
+                    if (!albumUri || !albumName) return;
+                    openSpotifyLibrary({
+                        uri: albumUri,
+                        name: albumName,
+                        entity_type: "album",
+                        image_url: albumImage,
+                    });
+                }}
+                onOpenArtist={(artist) =>
+                    openSpotifyLibrary({
+                        uri: artist.uri,
+                        name: artist.name,
+                        entity_type: "artist",
+                        image_url: null,
+                    })
+                }
+            />,
+            event.currentTarget as HTMLElement,
+        );
+    };
+
     useEffect(() => {
         const cleanupMetadataCaches = () => {
             const now = Date.now();
@@ -601,7 +702,10 @@ export default function QamPanel() {
     };
 
     const handleVolumeChange = (nextVolume: number) => {
-        const clampedVolume = Math.max(0, Math.min(100, Math.round(nextVolume)));
+        const clampedVolume = Math.max(
+            0,
+            Math.min(100, Math.round(nextVolume)),
+        );
         setVolume(clampedVolume);
         if (volumeTimeoutRef.current !== undefined)
             window.clearTimeout(volumeTimeoutRef.current);
@@ -609,6 +713,12 @@ export default function QamPanel() {
             volumeTimeoutRef.current = undefined;
             sendCommand("set_volume", { volume: clampedVolume });
         }, 180);
+    };
+
+    const handleActivateSoloist = () => {
+        if (sendCommand("activate")) {
+            setSoloistIsActive(true);
+        }
     };
 
     useEffect(() => {
@@ -729,6 +839,16 @@ export default function QamPanel() {
 
                     if (data.type === "auth_state" && data.logged_in === true) {
                         setIsLoggedIn(true);
+                        setSoloistDeviceName(
+                            typeof data.device_name === "string"
+                                ? data.device_name
+                                : "",
+                        );
+                        setSoloistIsActive(
+                            typeof data.is_active === "boolean"
+                                ? data.is_active
+                                : null,
+                        );
                         if (!requestedQueue) {
                             socket?.send(
                                 JSON.stringify({
@@ -775,6 +895,8 @@ export default function QamPanel() {
                             refreshTimer = undefined;
                         }
                         setIsLoggedIn(false);
+                        setSoloistDeviceName("");
+                        setSoloistIsActive(null);
                         setIsPlaying(false);
                         setIsShuffle(false);
                         setRepeatMode("off");
@@ -801,13 +923,14 @@ export default function QamPanel() {
                             contextUri: null,
                         });
                     } else if (data.type === "playback_state") {
+                        if (typeof data.is_active === "boolean") {
+                            setSoloistIsActive(data.is_active);
+                        }
                         if (
                             typeof data.volume === "number" &&
                             Number.isFinite(data.volume)
                         ) {
-                            setVolume(
-                                Math.max(0, Math.min(100, data.volume)),
-                            );
+                            setVolume(Math.max(0, Math.min(100, data.volume)));
                         }
                         const item =
                             data.item && typeof data.item === "object"
@@ -874,6 +997,13 @@ export default function QamPanel() {
                                 spotifyTrackAlbumUri(resolvedItem),
                             contextUri: spotifyContextUri(data.context),
                         });
+                    } else if (data.type === "device_changed") {
+                        if (typeof data.device_name === "string") {
+                            setSoloistDeviceName(data.device_name);
+                        }
+                        if (typeof data.is_active === "boolean") {
+                            setSoloistIsActive(data.is_active);
+                        }
                     } else if (data.type === "playback_changed") {
                         if (
                             data.status === "playing" ||
@@ -1094,14 +1224,53 @@ export default function QamPanel() {
                     solodeck
                 </div>
             </div>
-            <div
-                ref={panelBodyRef}
-                style={{ paddingTop: "16px" }}
-            >
+            <div ref={panelBodyRef} style={{ paddingTop: "16px" }}>
                 <PanelSection>
                     <PanelSectionRow>
-                        <div style={sectionHeadingStyle}>
-                            Now Playing{isDjPlayback ? " • DJ" : ""}
+                        <div style={{ width: "100%" }}>
+                            <div style={sectionHeadingStyle}>
+                                Now Playing{isDjPlayback ? " • DJ" : ""}
+                            </div>
+                            {isLoggedIn && soloistDeviceName && (
+                                <Focusable
+                                    onActivate={handleActivateSoloist}
+                                    onFocus={() =>
+                                        setDeviceControlFocused(true)
+                                    }
+                                    onBlur={() =>
+                                        setDeviceControlFocused(false)
+                                    }
+                                    style={{
+                                        background: deviceControlFocused
+                                            ? "rgba(255, 255, 255, 0.16)"
+                                            : "transparent",
+                                        borderRadius: "4px",
+                                        display: "inline-flex",
+                                        maxWidth: "100%",
+                                        padding: "4px 6px",
+                                        width: "fit-content",
+                                    }}
+                                >
+                                    <div
+                                        style={{
+                                            alignItems: "center",
+                                            color: "#1ed760",
+                                            display: "flex",
+                                            fontSize: "13px",
+                                            gap: "6px",
+                                            lineHeight: 1.3,
+                                            width: "fit-content",
+                                        }}
+                                    >
+                                        <FaVolumeUp aria-hidden="true" />
+                                        <span>
+                                            {soloistIsActive
+                                                ? `Playing on ${soloistDeviceName}`
+                                                : `Switch playback to ${soloistDeviceName}`}
+                                        </span>
+                                    </div>
+                                </Focusable>
+                            )}
                         </div>
                     </PanelSectionRow>
                     {trackDetails && canDisplayTrack(trackDetails) ? (
@@ -1111,6 +1280,9 @@ export default function QamPanel() {
                             <TrackDetailsFocusable
                                 item={trackDetails}
                                 animateIn
+                                onSecondaryButton={(event) =>
+                                    openTrackContextMenu(trackDetails, event)
+                                }
                             />
                         </PanelSectionRow>
                     ) : (
@@ -1347,6 +1519,12 @@ export default function QamPanel() {
                                             item={promotingEntry.item}
                                             mode="small"
                                             promoting
+                                            onSecondaryButton={(event) =>
+                                                openTrackContextMenu(
+                                                    promotingEntry.item,
+                                                    event,
+                                                )
+                                            }
                                         />
                                     </PanelSectionRow>
                                 )}
@@ -1371,6 +1549,12 @@ export default function QamPanel() {
                                             <TrackDetailsFocusable
                                                 item={entry.item}
                                                 mode="small"
+                                                onSecondaryButton={(event) =>
+                                                    openTrackContextMenu(
+                                                        entry.item,
+                                                        event,
+                                                    )
+                                                }
                                             />
                                         </PanelSectionRow>
                                     ))
@@ -1388,49 +1572,7 @@ export default function QamPanel() {
                     <PanelSectionRow>
                         <ButtonItem
                             layout="below"
-                            onClick={() => {
-                                let modal: ReturnType<typeof showModal>;
-                                modal = showModal(
-                                    <SpotifyLibraryModal
-                                        closeModal={() => modal.Close()}
-                                        onPlayTrack={async (
-                                            item,
-                                            contextUri,
-                                            position,
-                                        ) => {
-                                            if (
-                                                contextUri &&
-                                                position !== undefined &&
-                                                item.uri
-                                            ) {
-                                                return playWebApiTrackInContext(
-                                                    contextUri,
-                                                    item.uri,
-                                                    position,
-                                                );
-                                            }
-                                            if (!item.uri)
-                                                return {
-                                                    ok: false,
-                                                    error: "This Spotify item cannot be played.",
-                                                };
-                                            return sendCommand("play", {
-                                                uri: item.uri,
-                                            })
-                                                ? { ok: true }
-                                                : {
-                                                      ok: false,
-                                                      error: "Soloist connection is unavailable.",
-                                                  };
-                                        }}
-                                    />,
-                                    window,
-                                    {
-                                        strTitle: "Solodeck",
-                                        bNeverPopOut: true,
-                                    },
-                                );
-                            }}
+                            onClick={() => openSpotifyLibrary()}
                         >
                             Browse Library
                         </ButtonItem>

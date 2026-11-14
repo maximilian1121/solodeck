@@ -566,7 +566,13 @@ export default function ConfigPage() {
     ].join(" ");
 
     return (
+        <>
         <PanelSection>
+            <PanelSectionRow>
+                <div style={{ ...hintStyle, fontWeight: 600 }}>
+                    Spotify Connect
+                </div>
+            </PanelSectionRow>
             <PanelSectionRow>
                 <div style={hintStyle}>{SOLOIST_INTRO}</div>
             </PanelSectionRow>
@@ -802,7 +808,9 @@ export default function ConfigPage() {
                     </div>
                 </PanelSectionRow>
             )}
+        </PanelSection>
 
+        <PanelSection>
             <PanelSectionRow>
                 <div style={{ ...hintStyle, fontWeight: 600 }}>
                     Optional Spotify Web API
@@ -907,5 +915,7 @@ export default function ConfigPage() {
                 </div>
             </PanelSectionRow>
         </PanelSection>
+
+        </>
     );
 }

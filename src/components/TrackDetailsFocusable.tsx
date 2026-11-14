@@ -1,4 +1,4 @@
-import { Field } from "@decky/ui";
+import { Field, type GamepadEvent } from "@decky/ui";
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 
 type TrackCover = {
@@ -155,12 +155,14 @@ export default function TrackDetailsFocusable({
     mode = "tall",
     animateIn = false,
     promoting = false,
+    onSecondaryButton,
 }: {
     item: TrackItem;
     subtitle?: string;
     mode?: "small" | "tall";
     animateIn?: boolean;
     promoting?: boolean;
+    onSecondaryButton?: (event: GamepadEvent) => void;
 }) {
     const [focused, setFocused] = useState(false);
     const contentRef = useRef<HTMLDivElement>(null);
@@ -289,6 +291,10 @@ export default function TrackDetailsFocusable({
             spacingBetweenLabelAndChild="none"
             onGamepadFocus={() => setFocused(true)}
             onGamepadBlur={() => setFocused(false)}
+            onSecondaryButton={onSecondaryButton}
+            onSecondaryActionDescription={
+                onSecondaryButton ? "Options" : undefined
+            }
         >
             <div
                 style={{
@@ -302,6 +308,9 @@ export default function TrackDetailsFocusable({
                     display: "flex",
                     alignItems: "center",
                     overflow: "hidden",
+                    transition: queueRow
+                        ? "height 220ms ease, min-height 220ms ease"
+                        : undefined,
                 }}
             >
                 <div

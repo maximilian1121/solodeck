@@ -97,7 +97,9 @@ function installQamTabCore(): boolean {
     [(tree) => findInReactTree(tree, (node) => node?.props?.onFocusNavDeactivated)],
     (args, ret) => {
       if (!qamTabActive) return ret;
-      const tabsNode = findInReactTree(ret, (node) => Array.isArray(node?.props?.tabs));
+      const tabsNode = findInReactTree(ret, (node) =>
+        Array.isArray(node?.props?.tabs),
+      );
       if (tabsNode) {
         syncQamTabs(tabsNode.props.tabs, Boolean(args?.[0]?.visible));
       }

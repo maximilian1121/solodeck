@@ -29,7 +29,7 @@ line and is therefore visible to `ps` while pairing or the daemon runs.
 ### Optional Spotify Web API
 
 The QAM uses Soloist's WebSocket data first. If a current or queued track is
-missing a useful title, Solodeck can use the Spotify Web API to fill in the
+missing a useful title, solodeck can use the Spotify Web API to fill in the
 track name, artist, and album artwork. This feature is optional and does not
 control playback.
 

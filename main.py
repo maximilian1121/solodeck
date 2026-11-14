@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import gzip
 import hashlib
 import json
 import os
@@ -36,12 +37,24 @@ SOLOIST_RELEASE_URL = os.environ.get(
 # The plugin's own configuration lives under the settings dir Decky manages.
 SETTINGS_FILE = os.path.join(decky.DECKY_PLUGIN_SETTINGS_DIR, "settings.json")
 WEB_API_CACHE_FILE = os.path.join(
-    decky.DECKY_PLUGIN_SETTINGS_DIR, "spotify_web_api_cache.json"
+    decky.DECKY_PLUGIN_SETTINGS_DIR, "spotify_web_api_cache.json.gz"
 )
 DEFAULT_DEVICE_NAME = "solodeck"
 WEB_API_CACHE_TTL = 30 * 24 * 60 * 60
 WEB_API_CACHE_MAX_ENTRIES = 500
 WEB_API_CALLBACK_PORT = 48256
+
+# Library precache cache (gzip JSON). Populated proactively by
+# precache_web_api_library so the UI loads instantly instead of waiting
+# for round-trips to Spotify on every open. Refreshed only when the TTL
+# expires, not on every modal open.
+WEB_API_LIBRARY_CACHE_FILE = os.path.join(
+    decky.DECKY_PLUGIN_SETTINGS_DIR, "spotify_web_api_library_cache.json.gz"
+)
+WEB_API_LIBRARY_CACHE_TTL = 6 * 60 * 60  # 6 hours
+WEB_API_LIBRARY_MAX_PLAYLISTS = 20
+WEB_API_LIBRARY_MAX_ALBUMS = 20
+WEB_API_LIBRARY_MAX_ARTISTS = 20
 
 # How much process output to keep for the UI. Soloist prints progress lines
 # while it waits for the device to be picked in the Spotify app and while the
@@ -62,15 +75,6 @@ DL_DOWNLOADING = "downloading"
 DL_EXTRACTING = "extracting"
 DL_DONE = "done"
 DL_FAILED = "failed"
-
-
-class SpotifyRateLimitError(RuntimeError):
-    def __init__(
-        self, message: str, retry_after: int, reason: str | None = None
-    ) -> None:
-        super().__init__(message)
-        self.retry_after = retry_after
-        self.reason = reason
 
 
 def _soloist_root() -> str:
@@ -121,9 +125,9 @@ class Plugin:
         self._web_api_cache: dict[str, dict] | None = None
         self._web_api_market: str | None = None
         self._web_api_market_lock = asyncio.Lock()
-        self._web_api_rate_limit_until = 0.0
-        self._web_api_rate_limit_message: str | None = None
         self._web_api_token_lock = asyncio.Lock()
+        self._web_api_library_cache: dict | None = None
+        self._web_api_library_cache_lock = asyncio.Lock()
 
     # Where soloist is expected to live after the user downloads it.
     async def get_soloist_status(self) -> dict:
@@ -368,14 +372,14 @@ class Plugin:
             self._web_api_auth_error = str(error)
             self._web_api_auth_url = None
             response_status = "400 Bad Request"
-            response_body = "Spotify authorization failed. Return to Solodeck for details."
+            response_body = "Spotify authorization failed. Return to solodeck for details."
             decky.logger.error(f"Spotify Web API authorization failed: {error}")
         except Exception as error:
             self._web_api_auth_status = "error"
             self._web_api_auth_error = str(error)
             self._web_api_auth_url = None
             response_status = "500 Internal Server Error"
-            response_body = "Spotify authorization failed. Return to Solodeck for details."
+            response_body = "Spotify authorization failed. Return to solodeck for details."
             decky.logger.error(f"Spotify Web API callback failed: {error}")
         finally:
             body = response_body.encode("utf-8")
@@ -464,6 +468,17 @@ class Plugin:
             return None
 
     async def get_web_api_library(self) -> dict:
+        # Return precached library data if fresh (within TTL), so the UI loads
+        # instantly without a Spotify round-trip. Falls back to live fetch if
+        # the cache is empty or expired.
+        cached = self._get_cached_library()
+        if cached is not None:
+            return {
+                "ok": True,
+                "playlists": cached.get("playlists", []),
+                "albums": cached.get("albums", []),
+                "artists": cached.get("artists", []),
+            }
         try:
             playlists = await self._get_all_web_api_items(
                 "https://api.spotify.com/v1/me/playlists?limit=50"
@@ -518,6 +533,10 @@ class Plugin:
         playlist_id = self._spotify_uri_id(uri, "playlist")
         if not playlist_id:
             return {"ok": False, "error": "Invalid Spotify playlist."}
+        # Return precached playlist tracks if fresh (within TTL).
+        cached = self._get_cached_library_page(uri, "playlist_tracks")
+        if cached is not None:
+            return {"ok": True, "items": cached.get("items", [])}
         try:
             playlist = await self._get_all_web_api_items(
                 f"https://api.spotify.com/v1/playlists/{urllib.parse.quote(playlist_id)}/items?limit=50"
@@ -541,6 +560,14 @@ class Plugin:
         artist_id = self._spotify_uri_id(uri, "artist")
         if not artist_id or not isinstance(offset, int) or offset < 0:
             return {"ok": False, "error": "Invalid Spotify artist."}
+        # Return precached artist albums if fresh (within TTL).
+        cached = self._get_cached_library_page(uri, "artist_albums")
+        if cached is not None:
+            return {
+                "ok": True,
+                "items": cached.get("items", []),
+                "next_offset": cached.get("next_offset"),
+            }
         try:
             market = await self._get_web_api_market()
             params: dict[str, str] = {"include_groups": "album,single"}
@@ -589,6 +616,10 @@ class Plugin:
         album_id = self._spotify_uri_id(uri, "album")
         if not album_id:
             return {"ok": False, "error": "Invalid Spotify album."}
+        # Return precached album tracks if fresh (within TTL).
+        cached = self._get_cached_library_page(uri, "album_tracks")
+        if cached is not None:
+            return {"ok": True, "items": cached.get("items", [])}
         try:
             market = await self._get_web_api_market()
             params = {"limit": 50}
@@ -613,11 +644,18 @@ class Plugin:
 
     async def search_web_api(self, query: str) -> dict:
         normalized_query = (query or "").strip()
+        decky.logger.info(
+            f"Spotify search called: query='{query}' normalized='{normalized_query}'"
+        )
         if not normalized_query:
+            decky.logger.info("Spotify search: empty query, returning empty results")
             return {"ok": True, "tracks": [], "playlists": [], "artists": [], "albums": []}
         try:
             market = await self._get_web_api_market()
-        except (urllib.error.URLError, RuntimeError, ValueError, KeyError) as error:
+            decky.logger.info(
+                f"Spotify search market lookup result: market={market!r}"
+            )
+        except Exception as error:
             decky.logger.warning(f"Spotify search market lookup failed: {error}")
             market = None
         params = {
@@ -630,12 +668,30 @@ class Plugin:
         endpoint = "https://api.spotify.com/v1/search?" + urllib.parse.urlencode(
             params
         )
+        decky.logger.info(f"Spotify search endpoint: {endpoint}")
         try:
             result = await self._web_api_json(endpoint)
+            decky.logger.info(
+                f"Spotify search raw response type={type(result).__name__} "
+                f"result={result!r}"
+            )
+            if not isinstance(result, dict):
+                decky.logger.warning(
+                    f"Spotify search returned invalid response: {type(result)}"
+                )
+                return {"ok": False, "error": "Spotify returned an invalid search response."}
             response = {"ok": True, "tracks": [], "playlists": [], "artists": [], "albums": []}
             for entity_type in ("track", "playlist", "artist", "album"):
                 page = result.get(f"{entity_type}s", {})
                 values = page.get("items", []) if isinstance(page, dict) else []
+                # Spotify sometimes includes null items (e.g. playlists with
+                # deleted/removed entries). Filter those out before formatting
+                # so _format_web_api_browse_item never receives None.
+                values = [value for value in values if isinstance(value, dict)]
+                decky.logger.info(
+                    f"Spotify search entity={entity_type} page={page!r} "
+                    f"values_count={len(values)}"
+                )
                 if entity_type == "track":
                     response["tracks"] = [
                         item
@@ -655,9 +711,19 @@ class Plugin:
                         )
                         if item is not None
                     ]
+            decky.logger.info(
+                f"Spotify search final response: ok={response['ok']} "
+                f"tracks={len(response['tracks'])} "
+                f"playlists={len(response['playlists'])} "
+                f"artists={len(response['artists'])} "
+                f"albums={len(response['albums'])}"
+            )
             return response
-        except (urllib.error.URLError, RuntimeError, ValueError, KeyError) as error:
-            decky.logger.warning(f"Spotify search request failed: {error}")
+        except Exception as error:
+            decky.logger.error(
+                f"Spotify search request failed: query='{normalized_query}' "
+                f"error={error!r}"
+            )
             return {"ok": False, "error": str(error)}
 
     async def play_web_api_track_in_context(
@@ -716,7 +782,9 @@ class Plugin:
             decky.logger.warning(f"Spotify contextual playback failed: {error}")
             return {"ok": False, "error": str(error)}
 
-    async def _get_all_web_api_items(self, endpoint: str) -> dict:
+    async def _get_all_web_api_items(
+        self, endpoint: str, token: str | None = None
+    ) -> dict:
         result: dict = {}
         items: list = []
         nested_collection: str | None = None
@@ -725,7 +793,7 @@ class Plugin:
         for _ in range(200):
             if not next_endpoint:
                 break
-            page = await self._web_api_json(next_endpoint)
+            page = await self._web_api_json(next_endpoint, token=token)
             values = page.get("items", [])
             page_next = page.get("next")
             if not isinstance(values, list):
@@ -758,20 +826,10 @@ class Plugin:
         endpoint: str,
         method: str = "GET",
         payload: dict | None = None,
+        token: str | None = None,
     ) -> dict:
-        remaining = self._web_api_rate_limit_until - time.monotonic()
-        if remaining > 0:
-            retry_seconds = max(1, int(remaining + 0.999))
-            message = self._web_api_rate_limit_message
-            if message and "quota exceeded" in message.lower():
-                raise RuntimeError(
-                    f"{message} Try again in about {retry_seconds} seconds."
-                )
-            raise RuntimeError(
-                f"Spotify rate limit cooldown is active. Try again in "
-                f"{retry_seconds} seconds."
-            )
-        token = await self._get_web_api_token()
+        if token is None:
+            token = await self._get_web_api_token()
         if not token:
             raise RuntimeError(
                 "Connect Spotify Web API in configuration to browse your library."
@@ -780,17 +838,8 @@ class Plugin:
             return await asyncio.to_thread(
                 self._request_web_api_json, endpoint, token, method, payload
             )
-        except SpotifyRateLimitError as error:
-            self._web_api_rate_limit_until = max(
-                self._web_api_rate_limit_until,
-                time.monotonic() + error.retry_after,
-            )
-            self._web_api_rate_limit_message = str(error)
-            decky.logger.warning(
-                "Spotify Web API rate limit reached "
-                f"(reason={error.reason or 'unspecified'}, "
-                f"retry_after={error.retry_after}s)"
-            )
+        except Exception as error:
+            decky.logger.warning(f"Spotify Web API request failed: {error}")
             raise
 
     async def _get_web_api_market(self) -> str | None:
@@ -798,6 +847,12 @@ class Plugin:
             if self._web_api_market is not None:
                 return self._web_api_market or None
             profile = await self._web_api_json("https://api.spotify.com/v1/me")
+            if not isinstance(profile, dict):
+                self._web_api_market = ""
+                decky.logger.info(
+                    "Spotify account profile is unavailable; using the access token's market."
+                )
+                return None
             country = profile.get("country")
             if (
                 not isinstance(country, str)
@@ -856,29 +911,11 @@ class Plugin:
             endpoint_path = urllib.parse.urlsplit(endpoint).path
             detail = f": {api_message}" if isinstance(api_message, str) else ""
             if error.code == 429:
-                reason = (
-                    error_details.get("reason")
-                    if isinstance(error_details, dict)
-                    and isinstance(error_details.get("reason"), str)
-                    else None
-                )
-                retry_header = error.headers.get("Retry-After")
-                try:
-                    retry_after = max(1, int(float(retry_header)))
-                except (TypeError, ValueError):
-                    retry_after = 15 * 60 if reason == "QUOTA_EXCEEDED" else 30
-                if reason == "QUOTA_EXCEEDED":
-                    message = (
-                        "Spotify app quota exceeded (QUOTA_EXCEEDED). Check the "
-                        "app's quota mode and request usage in the Spotify "
-                        f"Developer Dashboard. Retry after {retry_after} seconds."
-                    )
-                else:
-                    message = (
-                        f"Spotify rate limited this app{detail}. Retry after "
-                        f"{retry_after} seconds."
-                    )
-                raise SpotifyRateLimitError(message, retry_after, reason) from error
+                raise RuntimeError(
+                    f"Spotify rate limited this app{detail}. Retry after "
+                    f"{error.headers.get('Retry-After', 'unknown')} seconds "
+                    f"({endpoint_path})."
+                ) from error
             if error.code == 403:
                 raise RuntimeError(
                     "Spotify denied access. Reconnect Web API in configuration and "
@@ -945,10 +982,21 @@ class Plugin:
         now = time.time()
         if self._web_api_cache is None:
             try:
-                with open(WEB_API_CACHE_FILE, "r", encoding="utf-8") as file:
+                with gzip.open(WEB_API_CACHE_FILE, "rt", encoding="utf-8") as file:
                     cache = json.load(file)
                 self._web_api_cache = cache if isinstance(cache, dict) else {}
-            except (FileNotFoundError, json.JSONDecodeError):
+            except (
+                FileNotFoundError,
+                gzip.BadGzipFile,
+                EOFError,
+                OSError,
+                UnicodeDecodeError,
+                json.JSONDecodeError,
+            ) as error:
+                if not isinstance(error, FileNotFoundError):
+                    decky.logger.warning(
+                        f"Spotify metadata cache could not be read: {error}"
+                    )
                 self._web_api_cache = {}
 
         entry = self._web_api_cache.get(uri)
@@ -981,9 +1029,305 @@ class Plugin:
         os.makedirs(decky.DECKY_PLUGIN_SETTINGS_DIR, exist_ok=True)
         tmp = WEB_API_CACHE_FILE + ".tmp"
         fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as file:
-            json.dump(self._web_api_cache or {}, file)
+        with os.fdopen(fd, "wb") as file:
+            with gzip.GzipFile(fileobj=file, mode="wb", mtime=0) as compressed:
+                compressed.write(
+                    json.dumps(self._web_api_cache or {}).encode("utf-8")
+                )
         os.replace(tmp, WEB_API_CACHE_FILE)
+
+    # --- library precache cache -------------------------------------------
+
+    def _get_cached_library(self) -> dict | None:
+        """Return the precached library if it exists and is within TTL."""
+        now = time.time()
+        if self._web_api_library_cache is None:
+            try:
+                with gzip.open(
+                    WEB_API_LIBRARY_CACHE_FILE, "rt", encoding="utf-8"
+                ) as file:
+                    cache = json.load(file)
+                self._web_api_library_cache = cache if isinstance(cache, dict) else {}
+            except (
+                FileNotFoundError,
+                gzip.BadGzipFile,
+                EOFError,
+                OSError,
+                UnicodeDecodeError,
+                json.JSONDecodeError,
+            ) as error:
+                if not isinstance(error, FileNotFoundError):
+                    decky.logger.warning(
+                        f"Spotify library cache could not be read: {error}"
+                    )
+                self._web_api_library_cache = {}
+
+        entry = self._web_api_library_cache.get("__library__")
+        if not isinstance(entry, dict):
+            return None
+        cached_at = entry.get("cached_at")
+        if not isinstance(cached_at, (int, float)) or (
+            now - cached_at > WEB_API_LIBRARY_CACHE_TTL
+        ):
+            self._web_api_library_cache.pop("__library__", None)
+            self._save_web_api_library_cache()
+            return None
+        return entry
+
+    def _save_web_api_library_cache(self) -> None:
+        os.makedirs(decky.DECKY_PLUGIN_SETTINGS_DIR, exist_ok=True)
+        tmp = WEB_API_LIBRARY_CACHE_FILE + ".tmp"
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "wb") as file:
+            with gzip.GzipFile(fileobj=file, mode="wb", mtime=0) as compressed:
+                compressed.write(
+                    json.dumps(self._web_api_library_cache or {}).encode("utf-8")
+                )
+        os.replace(tmp, WEB_API_LIBRARY_CACHE_FILE)
+
+    def _cache_library_page(
+        self, uri: str, page_type: str, items: list, next_offset: int | None = None
+    ) -> None:
+        """Cache a single library page (playlist tracks, album tracks, artist albums)."""
+        cache = self._web_api_library_cache
+        if cache is None:
+            cache = {}
+            self._web_api_library_cache = cache
+        entry: dict = {"cached_at": time.time(), "type": page_type, "items": items}
+        if next_offset is not None:
+            entry["next_offset"] = next_offset
+        cache[uri] = entry
+        self._save_web_api_library_cache()
+
+    def _get_cached_library_page(
+        self, uri: str, page_type: str
+    ) -> dict | None:
+        """Return a cached library page if it exists and is within TTL."""
+        now = time.time()
+        if self._web_api_library_cache is None:
+            try:
+                with gzip.open(
+                    WEB_API_LIBRARY_CACHE_FILE, "rt", encoding="utf-8"
+                ) as file:
+                    cache = json.load(file)
+                self._web_api_library_cache = cache if isinstance(cache, dict) else {}
+            except (
+                FileNotFoundError,
+                gzip.BadGzipFile,
+                EOFError,
+                OSError,
+                UnicodeDecodeError,
+                json.JSONDecodeError,
+            ):
+                self._web_api_library_cache = {}
+
+        entry = self._web_api_library_cache.get(uri)
+        if not isinstance(entry, dict):
+            return None
+        if entry.get("type") != page_type:
+            return None
+        cached_at = entry.get("cached_at")
+        if not isinstance(cached_at, (int, float)) or (
+            now - cached_at > WEB_API_LIBRARY_CACHE_TTL
+        ):
+            self._web_api_library_cache.pop(uri, None)
+            self._save_web_api_library_cache()
+            return None
+        return entry
+
+    async def precache_web_api_library(self) -> dict:
+        """Precache the Spotify library and its tracklists on the Python side.
+
+        Returns immediately with cached data if the library cache is fresh
+        (within TTL). Otherwise fetches playlists, saved albums, and followed
+        artists from Spotify, plus the tracklists for each playlist/album and
+        albums for each artist (bounded), and stores them in the gzip cache.
+        Refreshes only when the TTL expires, not on every modal open.
+        """
+        async with self._web_api_library_cache_lock:
+            cached = self._get_cached_library()
+            if cached is not None:
+                return {"ok": True, "cached": True}
+
+            token = await self._get_web_api_token()
+            if not token:
+                return {
+                    "ok": False,
+                    "error": "Connect Spotify Web API in configuration to precache library.",
+                }
+
+            try:
+                playlists = await self._get_all_web_api_items(
+                    "https://api.spotify.com/v1/me/playlists?limit=50", token
+                )
+                saved_albums = await self._get_all_web_api_items(
+                    "https://api.spotify.com/v1/me/albums?limit=50", token
+                )
+                followed = await self._get_all_web_api_items(
+                    "https://api.spotify.com/v1/me/following?type=artist&limit=50",
+                    token,
+                )
+
+                album_items = [
+                    entry.get("album", entry)
+                    for entry in saved_albums.get("items", [])
+                    if isinstance(entry, dict)
+                ]
+                artists = followed.get("artists", {})
+                artist_items = (
+                    artists.get("items", []) if isinstance(artists, dict) else []
+                )
+
+                playlist_browse = [
+                    item
+                    for item in (
+                        self._format_web_api_browse_item(value, "playlist")
+                        for value in playlists.get("items", [])
+                    )
+                    if item is not None
+                ]
+                album_browse = [
+                    item
+                    for item in (
+                        self._format_web_api_browse_item(value, "album")
+                        for value in album_items
+                    )
+                    if item is not None
+                ]
+                artist_browse = [
+                    item
+                    for item in (
+                        self._format_web_api_browse_item(value, "artist")
+                        for value in artist_items
+                    )
+                    if item is not None
+                ]
+
+                library_data = {
+                    "cached_at": time.time(),
+                    "playlists": playlist_browse,
+                    "albums": album_browse,
+                    "artists": artist_browse,
+                }
+
+                cache = self._web_api_library_cache
+                if cache is None:
+                    cache = {}
+                    self._web_api_library_cache = cache
+                cache["__library__"] = library_data
+                self._save_web_api_library_cache()
+
+                # Precache tracklists for each playlist (bounded).
+                for pl in playlist_browse[: WEB_API_LIBRARY_MAX_PLAYLISTS]:
+                    try:
+                        pl_token = await self._get_web_api_token()
+                        if not pl_token:
+                            break
+                        tracks_page = await self._get_all_web_api_items(
+                            f"https://api.spotify.com/v1/playlists/{urllib.parse.quote(pl['uri'].split(':')[2])}/items?limit=50",
+                            pl_token,
+                        )
+                        track_items = []
+                        for position, entry in enumerate(tracks_page.get("items", [])):
+                            if not isinstance(entry, dict):
+                                continue
+                            track = entry.get("item") or entry.get("track")
+                            if not isinstance(track, dict):
+                                continue
+                            formatted = self._format_web_api_track(track)
+                            if formatted is not None:
+                                track_items.append(
+                                    {"position": position, "item": formatted}
+                                )
+                        self._cache_library_page(
+                            pl["uri"], "playlist_tracks", track_items
+                        )
+                    except Exception as error:
+                        decky.logger.warning(
+                            f"Precache failed for playlist {pl['uri']}: {error}"
+                        )
+
+                # Precache tracklists for each album (bounded).
+                for al in album_browse[: WEB_API_LIBRARY_MAX_ALBUMS]:
+                    try:
+                        al_token = await self._get_web_api_token()
+                        if not al_token:
+                            break
+                        tracks_page = await self._get_all_web_api_items(
+                            f"https://api.spotify.com/v1/albums/{urllib.parse.quote(al['uri'].split(':')[2])}/tracks?limit=50",
+                            al_token,
+                        )
+                        track_items = []
+                        for position, track in enumerate(tracks_page.get("items", [])):
+                            if not isinstance(track, dict):
+                                continue
+                            formatted = self._format_web_api_track(track)
+                            if formatted is not None:
+                                track_items.append(
+                                    {"position": position, "item": formatted}
+                                )
+                        self._cache_library_page(
+                            al["uri"], "album_tracks", track_items
+                        )
+                    except Exception as error:
+                        decky.logger.warning(
+                            f"Precache failed for album {al['uri']}: {error}"
+                        )
+
+                # Precache albums for each artist (bounded).
+                for ar in artist_browse[: WEB_API_LIBRARY_MAX_ARTISTS]:
+                    try:
+                        ar_token = await self._get_web_api_token()
+                        if not ar_token:
+                            break
+                        market = await self._get_web_api_market()
+                        params: dict[str, str] = {"include_groups": "album,single"}
+                        if market is not None:
+                            params["market"] = market
+                        endpoint = (
+                            "https://api.spotify.com/v1/artists/"
+                            f"{urllib.parse.quote(ar['uri'].split(':')[2])}/albums?"
+                            + urllib.parse.urlencode(params)
+                        )
+                        result = await self._web_api_json(endpoint, token=ar_token)
+                        values = result.get("items", [])
+                        if not isinstance(values, list):
+                            raise RuntimeError(
+                                "Spotify returned an invalid artist albums response."
+                                                        )
+                        album_browse_items = [
+                            item
+                            for item in (
+                                self._format_web_api_browse_item(value, "album")
+                                for value in values
+                            )
+                            if item is not None
+                        ]
+                        next_offset = None
+                        next_url = result.get("next")
+                        if isinstance(next_url, str):
+                            next_query = urllib.parse.parse_qs(
+                                urllib.parse.urlsplit(next_url).query
+                            )
+                            try:
+                                candidate = int(next_query["offset"][0])
+                            except (KeyError, IndexError, ValueError):
+                                candidate = None
+                            if candidate is not None:
+                                next_offset = candidate
+                        self._cache_library_page(
+                            ar["uri"], "artist_albums", album_browse_items, next_offset
+                        )
+                    except Exception as error:
+                        decky.logger.warning(
+                            f"Precache failed for artist {ar['uri']}: {error}"
+                        )
+
+                decky.logger.info("Spotify library precache complete")
+                return {"ok": True, "cached": False}
+            except (urllib.error.URLError, RuntimeError, ValueError, KeyError) as error:
+                decky.logger.warning(f"Spotify library precache failed: {error}")
+                return {"ok": False, "error": str(error)}
 
     def _request_web_api_track(self, track_id: str, access_token: str) -> dict:
         request = urllib.request.Request(

@@ -4,20 +4,24 @@ import {
     MenuGroup,
     MenuItem,
     ModalRoot,
-    TextField,
     showContextMenu,
+    TextField,
+    Tabs,
 } from "@decky/ui";
 import {
     getWebApiAlbumTracks,
     getWebApiArtistAlbums,
     getWebApiLibrary,
     getWebApiPlaylistTracks,
+    HomeBrowseItem,
+    SearchBrowseItem,
+    precacheWebApiLibrary,
     searchWebApi,
     type SpotifyBrowseItem,
     type SpotifyContextTrack,
     type SpotifySearchResults,
 } from "../api";
-import { FaPlay } from "react-icons/fa";
+import { FaPlay, FaSyncAlt, FaHome, FaSearch } from "react-icons/fa";
 import {
     useEffect,
     useLayoutEffect,
@@ -60,7 +64,9 @@ function getQuotaRetrySeconds(error: string | undefined) {
         return null;
     }
 
-    const retrySeconds = error.match(/(?:retry after|about)\s+(\d+)\s*seconds?/i);
+    const retrySeconds = error.match(
+        /(?:retry after|about)\s+(\d+)\s*seconds?/i,
+    );
     return retrySeconds ? Math.max(1, Number(retrySeconds[1])) : null;
 }
 
@@ -133,8 +139,7 @@ function readSpotifyExplorerCache(): SpotifyExplorerCache {
                 });
         }
         return {
-            cachedAt:
-                typeof cache.cachedAt === "number" ? cache.cachedAt : 0,
+            cachedAt: typeof cache.cachedAt === "number" ? cache.cachedAt : 0,
             playlists: Array.isArray(cache.playlists)
                 ? cache.playlists
                       .filter(isBrowseItem)
@@ -221,7 +226,7 @@ function trackArtist(item: TrackItem): string {
     );
 }
 
-type TrackContextMenuProps = {
+export type TrackContextMenuProps = {
     title: string;
     artists: { uri: string; name: string }[];
     albumAvailable: boolean;
@@ -229,7 +234,7 @@ type TrackContextMenuProps = {
     onOpenArtist: (artist: { uri: string; name: string }) => void;
 };
 
-function TrackContextMenu({
+export function TrackContextMenu({
     title,
     artists,
     albumAvailable,
@@ -243,14 +248,14 @@ function TrackContextMenu({
             </MenuItem>
             {artists.length > 0 && (
                 <MenuGroup label="Artists">
-                {artists.map((artist) => (
-                    <MenuItem
-                        key={artist.uri}
-                        onSelected={() => onOpenArtist(artist)}
-                    >
-                        {artist.name}
-                    </MenuItem>
-                ))}
+                    {artists.map((artist) => (
+                        <MenuItem
+                            key={artist.uri}
+                            onSelected={() => onOpenArtist(artist)}
+                        >
+                            {artist.name}
+                        </MenuItem>
+                    ))}
                 </MenuGroup>
             )}
         </Menu>
@@ -260,6 +265,7 @@ function TrackContextMenu({
 export default function SpotifyLibraryModal({
     closeModal,
     onPlayTrack,
+    initialBrowseItem,
 }: {
     closeModal: () => void;
     onPlayTrack: (
@@ -267,6 +273,7 @@ export default function SpotifyLibraryModal({
         contextUri?: string,
         position?: number,
     ) => Promise<{ ok: boolean; error?: string }>;
+    initialBrowseItem?: SpotifyBrowseItem;
 }) {
     const playback = useSyncExternalStore(
         subscribePlaybackSnapshot,
@@ -293,12 +300,16 @@ export default function SpotifyLibraryModal({
     );
     const [libraryRefreshing, setLibraryRefreshing] = useState(true);
     const [libraryError, setLibraryError] = useState("");
+    const [page, setPage] = useState<"home" | "search" | "browse">("home");
     const [searchText, setSearchText] = useState("");
+    const [searchTab, setSearchTab] = useState<
+        "all" | "tracks" | "albums" | "artists"
+    >("all");
     const [searchResults, setSearchResults] =
         useState<SpotifySearchResults | null>(null);
     const [searchLoading, setSearchLoading] = useState(false);
     const [browseItem, setBrowseItem] = useState<SpotifyBrowseItem | null>(
-        null,
+        initialBrowseItem ?? HomeBrowseItem,
     );
     const [parentBrowseItem, setParentBrowseItem] =
         useState<SpotifyBrowseItem | null>(null);
@@ -319,10 +330,7 @@ export default function SpotifyLibraryModal({
     const libraryScrollRef = useRef<HTMLDivElement>(null);
     const detailsScrollRef = useRef<HTMLDivElement>(null);
     const scrollAnimationsRef = useRef(
-        new WeakMap<
-            HTMLDivElement,
-            { frame: number; target: number }
-        >(),
+        new WeakMap<HTMLDivElement, { frame: number; target: number }>(),
     );
 
     useEffect(() => {
@@ -360,8 +368,7 @@ export default function SpotifyLibraryModal({
     const quotaHours = Math.floor((quotaRemainingSeconds % 86400) / 3600);
     const quotaMinutes = Math.floor((quotaRemainingSeconds % 3600) / 60);
     const quotaSeconds = quotaRemainingSeconds % 60;
-    const cachedBrowsePage =
-        browseItem && explorerCache.pages[browseItem.uri];
+    const cachedBrowsePage = browseItem && explorerCache.pages[browseItem.uri];
     const refreshCooldownSeconds =
         browseItem &&
         (browseItem.entity_type === "playlist" ||
@@ -378,6 +385,22 @@ export default function SpotifyLibraryModal({
               )
             : 0;
 
+    // Derive the active page from browseItem.
+    // browseItem.uri "solodeck:home" -> home page
+    // browseItem.uri "solodeck:search" -> search page
+    // anything else (playlist/album/artist) -> browse page
+    useEffect(() => {
+        if (!browseItem) {
+            setPage("home");
+        } else if (browseItem.uri === "solodeck:search") {
+            setPage("search");
+        } else if (browseItem.uri === "solodeck:home") {
+            setPage("home");
+        } else {
+            setPage("browse");
+        }
+    }, [browseItem]);
+
     useEffect(() => {
         if (
             !browseItem ||
@@ -388,7 +411,10 @@ export default function SpotifyLibraryModal({
             return;
         }
 
-        const timer = window.setInterval(() => setRefreshClock(Date.now()), 1000);
+        const timer = window.setInterval(
+            () => setRefreshClock(Date.now()),
+            1000,
+        );
         return () => window.clearInterval(timer);
     }, [browseItem, explorerCache.pages]);
 
@@ -405,8 +431,8 @@ export default function SpotifyLibraryModal({
             Math.min(
                 scroller.scrollHeight - scroller.clientHeight,
                 scroller.scrollTop +
-            itemBounds.top +
-            itemBounds.height / 2 -
+                    itemBounds.top +
+                    itemBounds.height / 2 -
                     (scrollerBounds.top + scrollerBounds.height / 2),
             ),
         );
@@ -443,6 +469,7 @@ export default function SpotifyLibraryModal({
         label: string,
         scrollRef: RefObject<HTMLDivElement | null>,
         style: CSSProperties = sectionHeadingStyle,
+        icon?: React.ReactNode,
     ) => (
         <Focusable
             onFocus={(event) =>
@@ -450,7 +477,17 @@ export default function SpotifyLibraryModal({
             }
             style={{ width: "100%" }}
         >
-            <div style={style}>{label}</div>
+            <div
+                style={{
+                    ...style,
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "6px",
+                }}
+            >
+                {icon && <span style={{ fontSize: "14px" }}>{icon}</span>}
+                {label}
+            </div>
         </Focusable>
     );
 
@@ -492,6 +529,8 @@ export default function SpotifyLibraryModal({
 
     useEffect(() => {
         let cancelled = false;
+        setLibraryLoading(true);
+        setLibraryRefreshing(true);
         getWebApiLibrary()
             .then((result) => {
                 if (cancelled) return;
@@ -543,6 +582,30 @@ export default function SpotifyLibraryModal({
         return () => {
             cancelled = true;
         };
+    }, [initialBrowseItem?.uri]);
+
+    // Precache the library on the Python side once per session so the UI
+    // loads instantly. The Python side caches with a TTL and only refreshes
+    // occasionally, not on every modal open.
+    useEffect(() => {
+        let cancelled = false;
+        void precacheWebApiLibrary()
+            .then((result) => {
+                if (!cancelled && !result.ok) {
+                    console.warn(
+                        "solodeck: library precache failed:",
+                        result.error,
+                    );
+                }
+            })
+            .catch((error) => {
+                if (!cancelled) {
+                    console.warn("solodeck: library precache error", error);
+                }
+            });
+        return () => {
+            cancelled = true;
+        };
     }, []);
 
     useEffect(
@@ -562,6 +625,7 @@ export default function SpotifyLibraryModal({
         let cancelled = false;
         const timer = window.setTimeout(() => {
             setSearchLoading(true);
+            console.log(query);
             searchWebApi(query)
                 .then((result) => {
                     if (!cancelled) setSearchResults(result);
@@ -593,8 +657,7 @@ export default function SpotifyLibraryModal({
         const requestId = ++contentRequestRef.current;
         const cachedPage = explorerCache.pages[item.uri];
         const hasCachedTrackPage =
-            (item.entity_type === "playlist" ||
-                item.entity_type === "album") &&
+            (item.entity_type === "playlist" || item.entity_type === "album") &&
             cachedPage?.tracks !== undefined;
         const refreshCooldownRemaining =
             cachedPage?.tracks !== undefined
@@ -609,8 +672,7 @@ export default function SpotifyLibraryModal({
             return;
         }
         setParentBrowseItem(
-            item.entity_type === "album" &&
-                parentItem?.entity_type === "artist"
+            item.entity_type === "album" && parentItem?.entity_type === "artist"
                 ? parentItem
                 : null,
         );
@@ -622,6 +684,10 @@ export default function SpotifyLibraryModal({
         setLoadingMoreAlbums(false);
         setTracks(cachedPage?.tracks ?? []);
         setContentError("");
+        if (item.entity_type === "home") {
+            setContentLoading(false);
+            return;
+        }
         setContentLoading(!hasCachedTrackPage || forceRefresh);
         try {
             if (item.entity_type === "playlist") {
@@ -687,6 +753,10 @@ export default function SpotifyLibraryModal({
                 setContentLoading(false);
         }
     };
+
+    useEffect(() => {
+        if (initialBrowseItem) void openBrowseItem(initialBrowseItem);
+    }, [initialBrowseItem?.uri]);
 
     const loadMoreArtistAlbums = async () => {
         if (
@@ -754,7 +824,7 @@ export default function SpotifyLibraryModal({
             return;
         }
         ++contentRequestRef.current;
-        setBrowseItem(null);
+        setBrowseItem(HomeBrowseItem);
         setAlbums([]);
         setTracks([]);
         setContentError("");
@@ -803,62 +873,103 @@ export default function SpotifyLibraryModal({
         cursor: "pointer",
     };
 
+    // Resolve a string icon name (from SpotifyBrowseItem.icon) to an FA icon.
+    function iconNameToElement(
+        name: string,
+        size: number,
+    ): React.ReactNode | null {
+        switch (name) {
+            case "home":
+                return <FaHome size={size * 0.5} />;
+            case "search":
+                return <FaSearch size={size * 0.5} />;
+            default:
+                return null;
+        }
+    }
+
     const browseImage = (
         imageUrl: string | null | undefined,
         circular = false,
         size = 30,
         showPlayingIcon = false,
-    ) => (
-        <div
-            style={{
-                width: `${size}px`,
-                height: `${size}px`,
-                flex: `0 0 ${size}px`,
-                borderRadius: circular ? "50%" : "3px",
-                overflow: "hidden",
-                background: "rgba(255,255,255,0.08)",
-                position: "relative",
-            }}
-        >
-            {imageUrl && (
-                <img
-                    src={imageUrl}
-                    alt=""
-                    style={{
-                        width: "100%",
-                        height: "100%",
-                        objectFit: "cover",
-                    }}
-                />
-            )}
-            {showPlayingIcon && (
-                <span
-                    aria-label="Currently playing"
-                    style={{
-                        position: "absolute",
-                        right: "2px",
-                        bottom: "2px",
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        width: "14px",
-                        height: "14px",
-                        borderRadius: "50%",
-                        color: "var(--gpColor-Green)",
-                        background: "rgba(0,0,0,0.75)",
-                    }}
-                >
-                    <FaPlay size={7} />
-                </span>
-            )}
-        </div>
-    );
+        fallbackIcon?: string | React.ReactNode,
+    ) => {
+        const resolvedIcon =
+            typeof fallbackIcon === "string"
+                ? iconNameToElement(fallbackIcon, size)
+                : fallbackIcon;
+        return (
+            <div
+                style={{
+                    width: `${size}px`,
+                    height: `${size}px`,
+                    flex: `0 0 ${size}px`,
+                    borderRadius: circular ? "50%" : "3px",
+                    overflow: "hidden",
+                    background: "rgba(255,255,255,0.08)",
+                    position: "relative",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                }}
+            >
+                {imageUrl && imageUrl !== "/" && (
+                    <img
+                        src={imageUrl}
+                        alt=""
+                        style={{
+                            width: "100%",
+                            height: "100%",
+                            objectFit: "cover",
+                        }}
+                    />
+                )}
+                {(!imageUrl || imageUrl === "/") && resolvedIcon && (
+                    <span
+                        style={{
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            width: "100%",
+                            height: "100%",
+                            fontSize: size * 0.5,
+                            lineHeight: 1,
+                        }}
+                    >
+                        {resolvedIcon}
+                    </span>
+                )}
+                {showPlayingIcon && (
+                    <span
+                        aria-label="Currently playing"
+                        style={{
+                            position: "absolute",
+                            right: "2px",
+                            bottom: "2px",
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            width: "14px",
+                            height: "14px",
+                            borderRadius: "50%",
+                            color: "var(--gpColor-Green)",
+                            background: "rgba(0,0,0,0.75)",
+                        }}
+                    >
+                        <FaPlay size={7} />
+                    </span>
+                )}
+            </div>
+        );
+    };
 
     const renderBrowseButton = (
         item: SpotifyBrowseItem,
         onClick: () => void,
         selected = false,
         scrollRef: RefObject<HTMLDivElement | null> = detailsScrollRef,
+        icon?: string | React.ReactNode,
     ) => {
         const currentlyPlaying =
             (item.entity_type === "playlist" &&
@@ -902,6 +1013,7 @@ export default function SpotifyLibraryModal({
                             item.entity_type === "artist",
                             30,
                             currentlyPlaying,
+                            icon,
                         )}
                         <div style={{ minWidth: 0, flex: 1 }}>
                             <div
@@ -962,9 +1074,7 @@ export default function SpotifyLibraryModal({
             (browseItem?.entity_type === "album" ? browseItem.name : undefined);
         const albumImage =
             entry.item.decorations?.visual_identity?.cover?.[0]?.url ??
-            (browseItem?.entity_type === "album"
-                ? browseItem.image_url
-                : null);
+            (browseItem?.entity_type === "album" ? browseItem.image_url : null);
 
         const openTrackMenu = (event: CustomEvent) => {
             const menuParent = event.currentTarget ?? undefined;
@@ -998,9 +1108,7 @@ export default function SpotifyLibraryModal({
         return (
             <Focusable
                 key={`${entry.position}-${entry.item.uri ?? title}`}
-                onFocus={(event) =>
-                    centerFocusedRow(event.currentTarget)
-                }
+                onFocus={(event) => centerFocusedRow(event.currentTarget)}
                 onSecondaryButton={openTrackMenu}
                 onSecondaryActionDescription="Options"
                 onActivate={() =>
@@ -1086,24 +1194,6 @@ export default function SpotifyLibraryModal({
                     overflow: "hidden",
                 }}
             >
-                {/* <Focusable
-                    onActivate={(event) => {
-                        event.stopPropagation();
-                    }}
-                    style={{ flex: "0 0 auto" }}
-                >
-                    <TextField
-                        label="Explore Spotify"
-                        value={searchText}
-                        onChange={(event) => setSearchText(event.target.value)}
-                        onKeyDown={(event) => {
-                            if (event.key === "Enter") {
-                                event.preventDefault();
-                                event.stopPropagation();
-                            }
-                        }}
-                    />
-                </Focusable> */}
                 <Focusable
                     flow-children="horizontal"
                     style={{
@@ -1169,6 +1259,20 @@ export default function SpotifyLibraryModal({
                                 >
                                     {libraryError}
                                 </div>
+                            )}
+                            {renderBrowseButton(
+                                HomeBrowseItem,
+                                () => void openBrowseItem(HomeBrowseItem),
+                                browseItem?.uri === HomeBrowseItem.uri,
+                                libraryScrollRef,
+                                HomeBrowseItem.icon,
+                            )}
+                            {renderBrowseButton(
+                                SearchBrowseItem,
+                                () => void openBrowseItem(SearchBrowseItem),
+                                browseItem?.uri === SearchBrowseItem.uri,
+                                libraryScrollRef,
+                                SearchBrowseItem.icon,
                             )}
                             {renderFocusableHeading(
                                 "Playlists",
@@ -1289,9 +1393,10 @@ export default function SpotifyLibraryModal({
                                 pointerEvents: "none",
                             }}
                         >
-                            {albums.length > 0 || tracks.length > 0
-                                ? "Refreshing Spotify..."
-                                : "Loading Spotify..."}
+                            {page === "browse" &&
+                                (albums.length > 0 || tracks.length > 0
+                                    ? "Refreshing Spotify..."
+                                    : "Loading Spotify...")}
                         </div>
                         <div
                             ref={detailsScrollRef}
@@ -1303,45 +1408,217 @@ export default function SpotifyLibraryModal({
                                 paddingRight: "8px",
                             }}
                         >
-                            {searchText.trim() ? (
+                            {page === "search" ? (
                                 <>
-                                    <div style={sectionHeadingStyle}>
-                                        Search results
-                                    </div>
-                                    {searchLoading && (
-                                        <div style={quietMessageStyle}>
-                                            Searching Spotify...
-                                        </div>
-                                    )}
-                                    {searchResults && !searchResults.ok && (
-                                        <div
-                                            style={{
-                                                ...quietMessageStyle,
-                                                color: "var(--gpColor-Red)",
+                                    <Focusable
+                                        flow-children="vertical"
+                                        style={{
+                                            flex: "0 0 auto",
+                                            minHeight: 0,
+                                        }}
+                                    >
+                                        <TextField
+                                            label="Search Spotify"
+                                            value={searchText}
+                                            onChange={(event) =>
+                                                setSearchText(
+                                                    event.target.value,
+                                                )
+                                            }
+                                            onKeyDown={(event) => {
+                                                if (event.key === "Enter") {
+                                                    event.preventDefault();
+                                                    event.stopPropagation();
+                                                }
                                             }}
-                                        >
-                                            {searchResults.error}
-                                        </div>
-                                    )}
-                                    {searchResults?.tracks?.map(
-                                        (item, position) =>
-                                            renderTrackButton({
-                                                item,
-                                                position,
-                                            }),
-                                    )}
-                                    {[
-                                        ...(searchResults?.playlists ?? []),
-                                        ...(searchResults?.artists ?? []),
-                                        ...(searchResults?.albums ?? []),
-                                    ].map((item) =>
-                                        renderBrowseButton(
-                                            item,
-                                            () => void openBrowseItem(item),
-                                        ),
-                                    )}
+                                        />
+                                    </Focusable>
+                                    <Tabs
+                                        tabs={[
+                                            {
+                                                id: "all",
+                                                title: "All",
+                                                content: (
+                                                    <>
+                                                        {searchLoading && (
+                                                            <div
+                                                                style={
+                                                                    quietMessageStyle
+                                                                }
+                                                            >
+                                                                Searching
+                                                                Spotify...
+                                                            </div>
+                                                        )}
+                                                        {searchResults &&
+                                                            !searchResults.ok && (
+                                                                <div
+                                                                    style={{
+                                                                        ...quietMessageStyle,
+                                                                        color: "var(--gpColor-Red)",
+                                                                    }}
+                                                                >
+                                                                    {
+                                                                        searchResults.error
+                                                                    }
+                                                                </div>
+                                                            )}
+                                                        {searchResults?.tracks?.map(
+                                                            (item, position) =>
+                                                                renderTrackButton(
+                                                                    {
+                                                                        item,
+                                                                        position,
+                                                                    },
+                                                                ),
+                                                        )}
+                                                        {[
+                                                            ...(searchResults?.playlists ??
+                                                                []),
+                                                            ...(searchResults?.artists ??
+                                                                []),
+                                                            ...(searchResults?.albums ??
+                                                                []),
+                                                        ].map((item) =>
+                                                            renderBrowseButton(
+                                                                item,
+                                                                () =>
+                                                                    void openBrowseItem(
+                                                                        item,
+                                                                    ),
+                                                            ),
+                                                        )}
+                                                    </>
+                                                ),
+                                            },
+                                            {
+                                                id: "tracks",
+                                                title: "Tracks",
+                                                content: (
+                                                    <>
+                                                        {searchLoading && (
+                                                            <div
+                                                                style={
+                                                                    quietMessageStyle
+                                                                }
+                                                            >
+                                                                Searching
+                                                                Spotify...
+                                                            </div>
+                                                        )}
+                                                        {searchResults &&
+                                                            !searchResults.ok && (
+                                                                <div
+                                                                    style={{
+                                                                        ...quietMessageStyle,
+                                                                        color: "var(--gpColor-Red)",
+                                                                    }}
+                                                                >
+                                                                    {
+                                                                        searchResults.error
+                                                                    }
+                                                                </div>
+                                                            )}
+                                                        {searchResults?.tracks?.map(
+                                                            (item, position) =>
+                                                                renderTrackButton(
+                                                                    {
+                                                                        item,
+                                                                        position,
+                                                                    },
+                                                                ),
+                                                        )}
+                                                    </>
+                                                ),
+                                            },
+                                            {
+                                                id: "albums",
+                                                title: "Albums",
+                                                content: (
+                                                    <>
+                                                        {searchLoading && (
+                                                            <div
+                                                                style={
+                                                                    quietMessageStyle
+                                                                }
+                                                            >
+                                                                Searching
+                                                                Spotify...
+                                                            </div>
+                                                        )}
+                                                        {searchResults &&
+                                                            !searchResults.ok && (
+                                                                <div
+                                                                    style={{
+                                                                        ...quietMessageStyle,
+                                                                        color: "var(--gpColor-Red)",
+                                                                    }}
+                                                                >
+                                                                    {
+                                                                        searchResults.error
+                                                                    }
+                                                                </div>
+                                                            )}
+                                                        {searchResults?.albums?.map(
+                                                            (item) =>
+                                                                renderBrowseButton(
+                                                                    item,
+                                                                    () =>
+                                                                        void openBrowseItem(
+                                                                            item,
+                                                                        ),
+                                                                ),
+                                                        )}
+                                                    </>
+                                                ),
+                                            },
+                                            {
+                                                id: "artists",
+                                                title: "Artists",
+                                                content: (
+                                                    <>
+                                                        {searchLoading && (
+                                                            <div
+                                                                style={
+                                                                    quietMessageStyle
+                                                                }
+                                                            >
+                                                                Searching
+                                                                Spotify...
+                                                            </div>
+                                                        )}
+                                                        {searchResults &&
+                                                            !searchResults.ok && (
+                                                                <div
+                                                                    style={{
+                                                                        ...quietMessageStyle,
+                                                                        color: "var(--gpColor-Red)",
+                                                                    }}
+                                                                >
+                                                                    {
+                                                                        searchResults.error
+                                                                    }
+                                                                </div>
+                                                            )}
+                                                        {searchResults?.artists?.map(
+                                                            (item) =>
+                                                                renderBrowseButton(
+                                                                    item,
+                                                                    () =>
+                                                                        void openBrowseItem(
+                                                                            item,
+                                                                        ),
+                                                                ),
+                                                        )}
+                                                    </>
+                                                ),
+                                            },
+                                        ]}
+                                        activeTab={searchTab}
+                                        onShowTab={setSearchTab}
+                                    />
                                 </>
-                            ) : browseItem ? (
+                            ) : page === "browse" && browseItem ? (
                                 <>
                                     {parentBrowseItem && (
                                         <div
@@ -1397,10 +1674,14 @@ export default function SpotifyLibraryModal({
                                             }}
                                         >
                                             {browseImage(
-                                                browseItem.image_url,
+                                                browseItem.image_url === "/"
+                                                    ? undefined
+                                                    : browseItem.image_url,
                                                 browseItem.entity_type ===
                                                     "artist",
                                                 72,
+                                                false,
+                                                browseItem.icon,
                                             )}
                                             <div style={{ minWidth: 0 }}>
                                                 <div
@@ -1431,6 +1712,39 @@ export default function SpotifyLibraryModal({
                                             </div>
                                         </div>
                                     </Focusable>
+                                    {quotaUntil !== null && (
+                                        <div
+                                            style={{
+                                                ...quietMessageStyle,
+                                                background:
+                                                    "var(--gpSystem-DarkGrey)",
+                                                borderRadius: "8px",
+                                                marginBottom: "12px",
+                                                textAlign: "center",
+                                            }}
+                                        >
+                                            <div
+                                                style={{
+                                                    fontSize: "15px",
+                                                    fontWeight: 700,
+                                                    marginBottom: "6px",
+                                                }}
+                                            >
+                                                Your WebAPI quota has exceeded!
+                                            </div>
+                                            <div
+                                                style={{
+                                                    color: "var(--gpColor-Grey)",
+                                                    fontSize: "13px",
+                                                    lineHeight: 1.5,
+                                                }}
+                                            >
+                                                Please come back in {quotaDays}d{" "}
+                                                {quotaHours}h {quotaMinutes}m
+                                                and {quotaSeconds}sec.
+                                            </div>
+                                        </div>
+                                    )}
                                     {renderFocusableHeading(
                                         browseItem.entity_type === "artist"
                                             ? "Albums and singles"
@@ -1442,13 +1756,19 @@ export default function SpotifyLibraryModal({
                                     {(browseItem.entity_type === "playlist" ||
                                         browseItem.entity_type === "album") && (
                                         <Focusable
-                                            onActivate={() =>
+                                            onActivate={() => {
+                                                if (
+                                                    contentLoading ||
+                                                    refreshCooldownSeconds > 0
+                                                ) {
+                                                    return;
+                                                }
                                                 void openBrowseItem(
                                                     browseItem,
                                                     parentBrowseItem,
                                                     true,
-                                                )
-                                            }
+                                                );
+                                            }}
                                             style={{ width: "100%" }}
                                         >
                                             <button
@@ -1459,15 +1779,22 @@ export default function SpotifyLibraryModal({
                                                     refreshCooldownSeconds > 0
                                                 }
                                                 onClick={() =>
-                                                    void openBrowseItem(
-                                                        browseItem,
-                                                        parentBrowseItem,
-                                                        true,
-                                                    )
+                                                    contentLoading ||
+                                                    refreshCooldownSeconds > 0
+                                                        ? undefined
+                                                        : void openBrowseItem(
+                                                              browseItem,
+                                                              parentBrowseItem,
+                                                              true,
+                                                          )
                                                 }
                                                 style={{
                                                     ...browseButtonStyle,
                                                     ...quietMessageStyle,
+                                                    alignItems: "center",
+                                                    display: "flex",
+                                                    gap: "8px",
+                                                    justifyContent: "center",
                                                     cursor:
                                                         contentLoading ||
                                                         refreshCooldownSeconds >
@@ -1482,10 +1809,10 @@ export default function SpotifyLibraryModal({
                                                             : 1,
                                                 }}
                                             >
+                                                <FaSyncAlt aria-hidden="true" />
                                                 {contentLoading
                                                     ? "Refreshing tracks..."
-                                                    : refreshCooldownSeconds >
-                                                        0
+                                                    : refreshCooldownSeconds > 0
                                                       ? `Refresh available in ${refreshCooldownSeconds}s`
                                                       : "Refresh tracks"}
                                             </button>
@@ -1526,34 +1853,32 @@ export default function SpotifyLibraryModal({
                                     )}
                                     {browseItem.entity_type === "artist" &&
                                         albumsNextOffset !== null && (
-                                                <Focusable
-                                                    onActivate={
+                                            <Focusable
+                                                onActivate={
+                                                    loadMoreArtistAlbums
+                                                }
+                                                style={{ width: "100%" }}
+                                            >
+                                                <button
+                                                    type="button"
+                                                    tabIndex={-1}
+                                                    disabled={loadingMoreAlbums}
+                                                    onClick={
                                                         loadMoreArtistAlbums
                                                     }
-                                                    style={{ width: "100%" }}
+                                                    style={{
+                                                        ...browseButtonStyle,
+                                                        ...quietMessageStyle,
+                                                        cursor: loadingMoreAlbums
+                                                            ? "default"
+                                                            : "pointer",
+                                                    }}
                                                 >
-                                                    <button
-                                                        type="button"
-                                                        tabIndex={-1}
-                                                        disabled={
-                                                            loadingMoreAlbums
-                                                        }
-                                                        onClick={
-                                                            loadMoreArtistAlbums
-                                                        }
-                                                        style={{
-                                                            ...browseButtonStyle,
-                                                            ...quietMessageStyle,
-                                                            cursor: loadingMoreAlbums
-                                                                ? "default"
-                                                                : "pointer",
-                                                        }}
-                                                    >
-                                                        {loadingMoreAlbums
-                                                            ? "Loading more albums..."
-                                                            : "Load more albums"}
-                                                    </button>
-                                                </Focusable>
+                                                    {loadingMoreAlbums
+                                                        ? "Loading more albums..."
+                                                        : "Load more albums"}
+                                                </button>
+                                            </Focusable>
                                         )}
                                     {tracks.map((entry) =>
                                         renderTrackButton(
@@ -1584,64 +1909,99 @@ export default function SpotifyLibraryModal({
                                         )}
                                 </>
                             ) : (
-                                <div style={quietMessageStyle}>
-                                    {searchLoading
-                                        ? "Searching Spotify..."
-                                        : "Choose a playlist or artist from your library, or search Spotify."}
+                                // Custom home page — display current state as raw JSON.
+                                <div
+                                    style={{
+                                        width: "100%",
+                                        height: "100%",
+                                        overflowY: "auto",
+                                        padding: "12px",
+                                    }}
+                                >
+                                    For now this is just a debug page. It will
+                                    serve a purpouse later!
+                                    <pre
+                                        style={{
+                                            margin: 0,
+                                            fontSize: "12px",
+                                            lineHeight: 1.4,
+                                            color: "var(--gpColor-Grey)",
+                                            whiteSpace: "pre-wrap",
+                                            wordBreak: "break-all",
+                                        }}
+                                    >
+                                        {JSON.stringify(
+                                            {
+                                                page,
+                                                library: {
+                                                    playlists:
+                                                        library.playlists
+                                                            .length,
+                                                    albums: library.albums
+                                                        .length,
+                                                    artists:
+                                                        library.artists.length,
+                                                },
+                                                libraryLoading,
+                                                libraryError,
+                                                browseItem: browseItem
+                                                    ? {
+                                                          uri: browseItem.uri,
+                                                          name: browseItem.name,
+                                                          entity_type:
+                                                              browseItem.entity_type,
+                                                      }
+                                                    : null,
+                                                parentBrowseItem:
+                                                    parentBrowseItem
+                                                        ? {
+                                                              uri: parentBrowseItem.uri,
+                                                              name: parentBrowseItem.name,
+                                                              entity_type:
+                                                                  parentBrowseItem.entity_type,
+                                                          }
+                                                        : null,
+                                                albums: albums.length,
+                                                albumsNextOffset,
+                                                loadingMoreAlbums,
+                                                tracks: tracks.length,
+                                                contentLoading,
+                                                contentError,
+                                                playError,
+                                                quotaUntil,
+                                                searchText,
+                                                searchLoading,
+                                                searchResults: searchResults
+                                                    ? {
+                                                          ok: searchResults.ok,
+                                                          tracks:
+                                                              searchResults
+                                                                  .tracks
+                                                                  ?.length ?? 0,
+                                                          playlists:
+                                                              searchResults
+                                                                  .playlists
+                                                                  ?.length ?? 0,
+                                                          artists:
+                                                              searchResults
+                                                                  .artists
+                                                                  ?.length ?? 0,
+                                                          albums:
+                                                              searchResults
+                                                                  .albums
+                                                                  ?.length ?? 0,
+                                                      }
+                                                    : null,
+                                            },
+                                            null,
+                                            2,
+                                        )}
+                                    </pre>
                                 </div>
                             )}
                         </div>
                     </Focusable>
                 </Focusable>
-                {quotaUntil !== null && (
-                    <div
-                        role="alert"
-                        aria-live="assertive"
-                        style={{
-                            position: "absolute",
-                            inset: 0,
-                            zIndex: 10,
-                            display: "flex",
-                            alignItems: "center",
-                            justifyContent: "center",
-                            padding: "24px",
-                            boxSizing: "border-box",
-                            background: "rgba(12, 14, 18, 0.84)",
-                            backdropFilter: "blur(4px)",
-                            textAlign: "center",
-                        }}
-                    >
-                        <div
-                            style={{
-                                width: "min(520px, 100%)",
-                                padding: "28px",
-                                borderRadius: "8px",
-                                background: "var(--gpSystem-DarkGrey)",
-                                boxShadow: "0 12px 40px rgba(0, 0, 0, 0.4)",
-                            }}
-                        >
-                            <div
-                                style={{
-                                    fontSize: "22px",
-                                    fontWeight: 700,
-                                    marginBottom: "12px",
-                                }}
-                            >
-                                Your WebAPI quota has exceeded!
-                            </div>
-                            <div
-                                style={{
-                                    color: "var(--gpColor-Grey)",
-                                    fontSize: "15px",
-                                    lineHeight: 1.5,
-                                }}
-                            >
-                                Please come back in {quotaDays}d {quotaHours}h{" "}
-                                {quotaMinutes}m and {quotaSeconds}sec.
-                            </div>
-                        </div>
-                    </div>
-                )}
             </div>
         </ModalRoot>
     );
