@@ -644,17 +644,10 @@ class Plugin:
 
     async def search_web_api(self, query: str) -> dict:
         normalized_query = (query or "").strip()
-        decky.logger.info(
-            f"Spotify search called: query='{query}' normalized='{normalized_query}'"
-        )
         if not normalized_query:
-            decky.logger.info("Spotify search: empty query, returning empty results")
             return {"ok": True, "tracks": [], "playlists": [], "artists": [], "albums": []}
         try:
             market = await self._get_web_api_market()
-            decky.logger.info(
-                f"Spotify search market lookup result: market={market!r}"
-            )
         except Exception as error:
             decky.logger.warning(f"Spotify search market lookup failed: {error}")
             market = None
@@ -668,13 +661,8 @@ class Plugin:
         endpoint = "https://api.spotify.com/v1/search?" + urllib.parse.urlencode(
             params
         )
-        decky.logger.info(f"Spotify search endpoint: {endpoint}")
         try:
             result = await self._web_api_json(endpoint)
-            decky.logger.info(
-                f"Spotify search raw response type={type(result).__name__} "
-                f"result={result!r}"
-            )
             if not isinstance(result, dict):
                 decky.logger.warning(
                     f"Spotify search returned invalid response: {type(result)}"
@@ -688,10 +676,6 @@ class Plugin:
                 # deleted/removed entries). Filter those out before formatting
                 # so _format_web_api_browse_item never receives None.
                 values = [value for value in values if isinstance(value, dict)]
-                decky.logger.info(
-                    f"Spotify search entity={entity_type} page={page!r} "
-                    f"values_count={len(values)}"
-                )
                 if entity_type == "track":
                     response["tracks"] = [
                         item
@@ -711,19 +695,9 @@ class Plugin:
                         )
                         if item is not None
                     ]
-            decky.logger.info(
-                f"Spotify search final response: ok={response['ok']} "
-                f"tracks={len(response['tracks'])} "
-                f"playlists={len(response['playlists'])} "
-                f"artists={len(response['artists'])} "
-                f"albums={len(response['albums'])}"
-            )
             return response
         except Exception as error:
-            decky.logger.error(
-                f"Spotify search request failed: query='{normalized_query}' "
-                f"error={error!r}"
-            )
+            decky.logger.warning(f"Spotify search request failed: {error}")
             return {"ok": False, "error": str(error)}
 
     async def play_web_api_track_in_context(

@@ -313,6 +313,9 @@ export default function SpotifyLibraryModal({
     );
     const [parentBrowseItem, setParentBrowseItem] =
         useState<SpotifyBrowseItem | null>(null);
+    const [breadcrumbPath, setBreadcrumbPath] = useState<SpotifyBrowseItem[]>(
+        [],
+    );
     const [albums, setAlbums] = useState<SpotifyBrowseItem[]>([]);
     const [albumsNextOffset, setAlbumsNextOffset] = useState<number | null>(
         null,
@@ -688,6 +691,14 @@ export default function SpotifyLibraryModal({
             setContentLoading(false);
             return;
         }
+        // Build breadcrumb path: home -> ... -> current item
+        setBreadcrumbPath((prev) => {
+            // Don't add duplicate consecutive entries
+            if (prev.length > 0 && prev[prev.length - 1].uri === item.uri) {
+                return prev;
+            }
+            return [...prev, item];
+        });
         setContentLoading(!hasCachedTrackPage || forceRefresh);
         try {
             if (item.entity_type === "playlist") {
@@ -817,6 +828,13 @@ export default function SpotifyLibraryModal({
     };
 
     const returnToBrowseParent = () => {
+        // Pop the current item from breadcrumb path and navigate to previous
+        setBreadcrumbPath((prev) => {
+            if (prev.length <= 1) {
+                return [];
+            }
+            return prev.slice(0, prev.length - 1);
+        });
         const parent = parentBrowseItem;
         setParentBrowseItem(null);
         if (parent) {
@@ -826,6 +844,8 @@ export default function SpotifyLibraryModal({
         ++contentRequestRef.current;
         setBrowseItem(HomeBrowseItem);
         setAlbums([]);
+        setAlbumsNextOffset(null);
+        setLoadingMoreAlbums(false);
         setTracks([]);
         setContentError("");
     };
@@ -1613,6 +1633,48 @@ export default function SpotifyLibraryModal({
                                                     </>
                                                 ),
                                             },
+                                            {
+                                                id: "playlists",
+                                                title: "Playlists",
+                                                content: (
+                                                    <>
+                                                        {searchLoading && (
+                                                            <div
+                                                                style={
+                                                                    quietMessageStyle
+                                                                }
+                                                            >
+                                                                Searching
+                                                                Spotify...
+                                                            </div>
+                                                        )}
+                                                        {searchResults &&
+                                                            !searchResults.ok && (
+                                                            <div
+                                                                style={{
+                                                                    ...quietMessageStyle,
+                                                                    color:
+                                                                        "var(--gpColor-Red)",
+                                                                }}
+                                                            >
+                                                                {
+                                                                    searchResults.error
+                                                                }
+                                                            </div>
+                                                        )}
+                                                        {searchResults?.playlists?.map(
+                                                            (item) =>
+                                                                renderBrowseButton(
+                                                                    item,
+                                                                    () =>
+                                                                        void openBrowseItem(
+                                                                        item,
+                                                                    ),
+                                                                ),
+                                                        )}
+                                                    </>
+                                                ),
+                                            },
                                         ]}
                                         activeTab={searchTab}
                                         onShowTab={setSearchTab}
@@ -1620,6 +1682,95 @@ export default function SpotifyLibraryModal({
                                 </>
                             ) : page === "browse" && browseItem ? (
                                 <>
+                                    {breadcrumbPath.length > 0 && (
+                                        <div
+                                            style={{
+                                                display: "flex",
+                                                alignItems: "center",
+                                                gap: "4px",
+                                                marginBottom: "12px",
+                                                flexWrap: "wrap",
+                                            }}
+                                        >
+                                            {breadcrumbPath.map(
+                                                (item, index) => {
+                                                    const isLast =
+                                                        index ===
+                                                        breadcrumbPath.length -
+                                                            1;
+                                                    return (
+                                                        <Focusable
+                                                            key={item.uri}
+                                                            onActivate={() => {
+                                                                // Navigate to this breadcrumb item
+                                                                setBrowseItem(item);
+                                                                setBreadcrumbPath(
+                                                                    breadcrumbPath.slice(
+                                                                        0,
+                                                                        index + 1,
+                                                                    ),
+                                                                );
+                                                                if (
+                                                                    item.entity_type ===
+                                                                    "home"
+                                                                ) {
+                                                                    setAlbums([]);
+                                                                    setAlbumsNextOffset(
+                                                                        null,
+                                                                    );
+                                                                    setLoadingMoreAlbums(
+                                                                        false,
+                                                                    );
+                                                                    setTracks([]);
+                                                                }
+                                                            }}
+                                                            style={{
+                                                                flex:
+                                                                    "0 0 auto",
+                                                            }}
+                                                        >
+                                                            <button
+                                                                type="button"
+                                                                tabIndex={-1}
+                                                                onClick={
+                                                                    isLast
+                                                                        ? undefined
+                                                                        : undefined
+                                                                }
+                                                                style={{
+                                                                    ...browseButtonStyle,
+                                                                    width: "auto",
+                                                                    padding:
+                                                                        "4px 8px",
+                                                                    background:
+                                                                        isLast
+                                                                            ? "rgba(255,255,255,0.08)"
+                                                                            : "transparent",
+                                                                    border: isLast
+                                                                        ? "1px solid var(--gpSystem-Separator)"
+                                                                        : undefined,
+                                                                }}
+                                                            >
+                                                                {isLast ? "" : ""}{" "}
+                                                                {item.name}
+                                                            </button>
+                                                            {!isLast && (
+                                                                <span
+                                                                    style={{
+                                                                        color:
+                                                                            "var(--gpColor-Grey)",
+                                                                        fontSize: "12px",
+                                                                    }}
+                                                                >
+                                                                    /
+                                                                </span>
+                                                            )}
+                                                        </Focusable>
+                                                    );
+                                                },
+                                            )}
+                                        </div>
+                                    )}
                                     {parentBrowseItem && (
                                         <div
                                             style={{
