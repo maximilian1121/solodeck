@@ -1676,7 +1676,7 @@ export default function SpotifyLibraryModal({
                             ) : page === "browse" && browseItem ? (
                                 <>
                                     {breadcrumbPath.length > 0 && (
-                                        <div
+                                        <Focusable
                                             flow-children="horizontal"
                                             style={{
                                                 display: "flex",
@@ -1692,10 +1692,9 @@ export default function SpotifyLibraryModal({
                                                         breadcrumbPath.length -
                                                             1;
                                                     return (
-                                                        <Focusable
+                                                        <div
                                                             key={item.uri}
-                                                            onActivate={() => {
-                                                                // Navigate to this breadcrumb item: load content and truncate path
+                                                            onClick={() => {
                                                                 void openBrowseItem(
                                                                     item,
                                                                     null,
@@ -1711,7 +1710,7 @@ export default function SpotifyLibraryModal({
                                                                 );
                                                             }}
                                                             style={{
-                                                                flex: "0 0 auto",
+                                                                display: "flex",
                                                                 alignItems: "center",
                                                             }}
                                                         >
@@ -1719,9 +1718,7 @@ export default function SpotifyLibraryModal({
                                                                 type="button"
                                                                 tabIndex={-1}
                                                                 onClick={
-                                                                    isLast
-                                                                        ? undefined
-                                                                        : undefined
+                                                                    undefined
                                                                 }
                                                                 style={{
                                                                     ...browseButtonStyle,
@@ -1750,22 +1747,26 @@ export default function SpotifyLibraryModal({
                                                             {!isLast && (
                                                                 <span
                                                                     style={{
-                                                                        color: "var(--gpColor-Grey)",
+                                                                        color:
+                                                                            "var(--gpColor-Grey)",
                                                                         fontSize:
                                                                             "12px",
                                                                         padding:
                                                                             "0 4px",
                                                                         lineHeight: 1,
+                                                                        display: "flex",
+                                                                        alignItems: "center",
+                                                                        height: "100%",
                                                                     }}
                                                                 >
                                                                     /
                                                                 </span>
                                                             )}
-                                                        </Focusable>
+                                                        </div>
                                                     );
                                                 },
                                             )}
-                                        </div>
+                                        </Focusable>
                                     )}
                                     <Focusable
                                         onFocus={(event) =>
