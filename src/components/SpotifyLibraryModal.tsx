@@ -8,6 +8,7 @@ import {
     TextField,
     Tabs,
 } from "@decky/ui";
+import EqIcon from "../eq.svg";
 import {
     getWebApiAlbumTracks,
     getWebApiArtistAlbums,
@@ -21,7 +22,7 @@ import {
     type SpotifyContextTrack,
     type SpotifySearchResults,
 } from "../api";
-import { FaPlay, FaSyncAlt, FaHome, FaSearch } from "react-icons/fa";
+import { FaSyncAlt, FaHome, FaSearch } from "react-icons/fa";
 import {
     useEffect,
     useLayoutEffect,
@@ -656,7 +657,7 @@ export default function SpotifyLibraryModal({
         item: SpotifyBrowseItem,
         parentItem: SpotifyBrowseItem | null = null,
         forceRefresh = false,
-        resetBreadcrumbs = true,
+        resetBreadcrumbs: boolean | undefined = undefined,
     ) => {
         const requestId = ++contentRequestRef.current;
         const cachedPage = explorerCache.pages[item.uri];
@@ -693,11 +694,12 @@ export default function SpotifyLibraryModal({
             setBreadcrumbPath([]);
             return;
         }
-        if (resetBreadcrumbs) {
-            // Library sidebar or search navigation - start fresh breadcrumb trail
+        // When on the browse page, append to breadcrumb trail (navigating
+        // within library content). When on home/search, start fresh.
+        const shouldReset = resetBreadcrumbs ?? page !== "browse";
+        if (shouldReset) {
             setBreadcrumbPath([item]);
         } else {
-            // Browse page content navigation - append to breadcrumb trail
             setBreadcrumbPath((prev) => {
                 if (prev.length > 0 && prev[prev.length - 1].uri === item.uri) {
                     return prev;
@@ -833,7 +835,6 @@ export default function SpotifyLibraryModal({
         }
     };
 
-
     const playTrack = async (
         item: TrackItem,
         contextUri?: string,
@@ -961,7 +962,7 @@ export default function SpotifyLibraryModal({
                             background: "rgba(0,0,0,0.75)",
                         }}
                     >
-                        <FaPlay size={7} />
+                        <img src={EqIcon} />
                     </span>
                 )}
             </div>
@@ -1634,26 +1635,25 @@ export default function SpotifyLibraryModal({
                                                         )}
                                                         {searchResults &&
                                                             !searchResults.ok && (
-                                                            <div
-                                                                style={{
-                                                                    ...quietMessageStyle,
-                                                                    color:
-                                                                        "var(--gpColor-Red)",
-                                                                }}
-                                                            >
-                                                                {
-                                                                    searchResults.error
-                                                                }
-                                                            </div>
-                                                        )}
+                                                                <div
+                                                                    style={{
+                                                                        ...quietMessageStyle,
+                                                                        color: "var(--gpColor-Red)",
+                                                                    }}
+                                                                >
+                                                                    {
+                                                                        searchResults.error
+                                                                    }
+                                                                </div>
+                                                            )}
                                                         {searchResults?.playlists?.map(
                                                             (item) =>
                                                                 renderBrowseButton(
                                                                     item,
                                                                     () =>
                                                                         void openBrowseItem(
-                                                                        item,
-                                                                    ),
+                                                                            item,
+                                                                        ),
                                                                 ),
                                                         )}
                                                     </>
@@ -1697,13 +1697,13 @@ export default function SpotifyLibraryModal({
                                                                 setBreadcrumbPath(
                                                                     breadcrumbPath.slice(
                                                                         0,
-                                                                        index + 1,
+                                                                        index +
+                                                                            1,
                                                                     ),
                                                                 );
                                                             }}
                                                             style={{
-                                                                flex:
-                                                                    "0 0 auto",
+                                                                flex: "0 0 auto",
                                                             }}
                                                         >
                                                             <button
@@ -1726,10 +1726,9 @@ export default function SpotifyLibraryModal({
                                                                     border: isLast
                                                                         ? "1px solid var(--gpSystem-Separator)"
                                                                         : undefined,
-                                                                    color:
-                                                                        isLast
-                                                                            ? "inherit"
-                                                                            : "var(--gpColor-Grey)",
+                                                                    color: isLast
+                                                                        ? "inherit"
+                                                                        : "var(--gpColor-Grey)",
                                                                     opacity:
                                                                         isLast
                                                                             ? 1
@@ -1741,9 +1740,9 @@ export default function SpotifyLibraryModal({
                                                             {!isLast && (
                                                                 <span
                                                                     style={{
-                                                                        color:
-                                                                            "var(--gpColor-Grey)",
-                                                                        fontSize: "12px",
+                                                                        color: "var(--gpColor-Grey)",
+                                                                        fontSize:
+                                                                            "12px",
                                                                         padding:
                                                                             "0 4px",
                                                                     }}
@@ -1776,7 +1775,8 @@ export default function SpotifyLibraryModal({
                                             <div
                                                 style={{
                                                     display: "flex",
-                                                    justifyContent: "space-between",
+                                                    justifyContent:
+                                                        "space-between",
                                                     alignItems: "center",
                                                     flexWrap: "wrap",
                                                     gap: "8px",
@@ -1790,7 +1790,8 @@ export default function SpotifyLibraryModal({
                                                     }}
                                                 >
                                                     {browseImage(
-                                                        browseItem.image_url === "/"
+                                                        browseItem.image_url ===
+                                                            "/"
                                                             ? undefined
                                                             : browseItem.image_url,
                                                         browseItem.entity_type ===
@@ -1799,10 +1800,13 @@ export default function SpotifyLibraryModal({
                                                         false,
                                                         browseItem.icon,
                                                     )}
-                                                    <div style={{ minWidth: 0 }}>
+                                                    <div
+                                                        style={{ minWidth: 0 }}
+                                                    >
                                                         <div
                                                             style={{
-                                                                fontSize: "20px",
+                                                                fontSize:
+                                                                    "20px",
                                                                 fontWeight: 600,
                                                                 overflowWrap:
                                                                     "anywhere",
@@ -1815,23 +1819,30 @@ export default function SpotifyLibraryModal({
                                                             <div
                                                                 style={{
                                                                     color: "var(--gpColor-Grey)",
-                                                                    fontSize: "13px",
-                                                                    paddingTop: "3px",
+                                                                    fontSize:
+                                                                        "13px",
+                                                                    paddingTop:
+                                                                        "3px",
                                                                 }}
                                                             >
-                                                                {browseItem.entity_type === "album" ? "Album" : "Playlist"}
+                                                                {browseItem.entity_type ===
+                                                                "album"
+                                                                    ? "Album"
+                                                                    : "Playlist"}
                                                             </div>
                                                         )}
                                                     </div>
                                                 </div>
-                                                {(browseItem.entity_type === "playlist" ||
+                                                {(browseItem.entity_type ===
+                                                    "playlist" ||
                                                     browseItem.entity_type ===
                                                         "album") && (
                                                     <Focusable
                                                         onActivate={() => {
                                                             if (
                                                                 contentLoading ||
-                                                                refreshCooldownSeconds > 0
+                                                                refreshCooldownSeconds >
+                                                                    0
                                                             ) {
                                                                 return;
                                                             }
@@ -1841,18 +1852,22 @@ export default function SpotifyLibraryModal({
                                                                 true,
                                                             );
                                                         }}
-                                                        style={{ width: "auto" }}
+                                                        style={{
+                                                            width: "auto",
+                                                        }}
                                                     >
                                                         <button
                                                             type="button"
                                                             tabIndex={-1}
                                                             disabled={
                                                                 contentLoading ||
-                                                                refreshCooldownSeconds > 0
+                                                                refreshCooldownSeconds >
+                                                                    0
                                                             }
                                                             onClick={() =>
                                                                 contentLoading ||
-                                                                refreshCooldownSeconds > 0
+                                                                refreshCooldownSeconds >
+                                                                    0
                                                                     ? undefined
                                                                     : void openBrowseItem(
                                                                           browseItem,
@@ -1863,10 +1878,12 @@ export default function SpotifyLibraryModal({
                                                             style={{
                                                                 ...browseButtonStyle,
                                                                 ...quietMessageStyle,
-                                                                alignItems: "center",
+                                                                alignItems:
+                                                                    "center",
                                                                 display: "flex",
                                                                 gap: "6px",
-                                                                justifyContent: "center",
+                                                                justifyContent:
+                                                                    "center",
                                                                 cursor:
                                                                     contentLoading ||
                                                                     refreshCooldownSeconds >
@@ -1884,7 +1901,8 @@ export default function SpotifyLibraryModal({
                                                             <FaSyncAlt aria-hidden="true" />
                                                             {contentLoading
                                                                 ? "Refreshing..."
-                                                                : refreshCooldownSeconds > 0
+                                                                : refreshCooldownSeconds >
+                                                                    0
                                                                   ? `Refresh in ${refreshCooldownSeconds}s`
                                                                   : "Refresh"}
                                                         </button>
@@ -1898,8 +1916,7 @@ export default function SpotifyLibraryModal({
                                                     gap: "14px",
                                                     paddingBottom: "8px",
                                                 }}
-                                            >
-                                        </div>
+                                            ></div>
                                         </div>
                                     </Focusable>
                                     {quotaUntil !== null && (
