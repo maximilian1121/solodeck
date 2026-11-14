@@ -1692,9 +1692,9 @@ export default function SpotifyLibraryModal({
                                                         breadcrumbPath.length -
                                                             1;
                                                     return (
-                                                        <div
+                                                        <Focusable
                                                             key={item.uri}
-                                                            onClick={() => {
+                                                            onActivate={() => {
                                                                 void openBrowseItem(
                                                                     item,
                                                                     null,
@@ -1710,7 +1710,7 @@ export default function SpotifyLibraryModal({
                                                                 );
                                                             }}
                                                             style={{
-                                                                display: "flex",
+                                                                flex: "0 0 auto",
                                                                 alignItems: "center",
                                                             }}
                                                         >
@@ -1762,7 +1762,7 @@ export default function SpotifyLibraryModal({
                                                                     /
                                                                 </span>
                                                             )}
-                                                        </div>
+                                                        </Focusable>
                                                     );
                                                 },
                                             )}
