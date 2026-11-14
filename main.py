@@ -70,6 +70,13 @@ DAEMON_RESTART_DELAY = 3.0
 DAEMON_MIN_UPTIME = 10.0
 SOLOIST_WS_PORT = 35797
 
+# Steam Deck's Python installation may not include CA certificates, which
+# causes SSL verification failures when contacting Spotify's CDN and Web API.
+# Use an unverified SSL context for all outbound HTTPS requests.
+_UNVERIFIED_SSL_CONTEXT = ssl.create_default_context()
+_UNVERIFIED_SSL_CONTEXT.check_hostname = False
+_UNVERIFIED_SSL_CONTEXT.verify_mode = ssl.CERT_NONE
+
 # Download status phases.
 DL_IDLE = "idle"
 DL_DOWNLOADING = "downloading"
@@ -434,7 +441,9 @@ class Plugin:
             method="POST",
         )
         try:
-            with urllib.request.urlopen(request, timeout=15) as response:
+            with urllib.request.urlopen(
+                request, timeout=15, context=_UNVERIFIED_SSL_CONTEXT
+            ) as response:
                 result = json.loads(response.read().decode("utf-8"))
         except urllib.error.HTTPError as error:
             details = error.read().decode("utf-8", "replace")
@@ -863,7 +872,9 @@ class Plugin:
             method=method,
         )
         try:
-            with urllib.request.urlopen(request, timeout=20) as response:
+            with urllib.request.urlopen(
+                request, timeout=20, context=_UNVERIFIED_SSL_CONTEXT
+            ) as response:
                 if response.status == 204:
                     return {}
                 result = json.loads(response.read().decode("utf-8"))
@@ -1310,7 +1321,9 @@ class Plugin:
             headers={"Authorization": f"Bearer {access_token}"},
         )
         try:
-            with urllib.request.urlopen(request, timeout=15) as response:
+            with urllib.request.urlopen(
+                request, timeout=15, context=_UNVERIFIED_SSL_CONTEXT
+            ) as response:
                 result = json.loads(response.read().decode("utf-8"))
         except urllib.error.HTTPError as error:
             if error.code == 401:
