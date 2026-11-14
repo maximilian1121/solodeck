@@ -588,6 +588,8 @@ export default function SpotifyLibraryModal({
         };
     }, [initialBrowseItem?.uri]);
 
+
+
     // Precache the library on the Python side once per session so the UI
     // loads instantly. The Python side caches with a TTL and only refreshes
     // occasionally, not on every modal open.
@@ -1288,6 +1290,7 @@ export default function SpotifyLibraryModal({
                                 libraryScrollRef,
                                 SearchBrowseItem.icon,
                             )}
+
                             {renderFocusableHeading(
                                 "Playlists",
                                 libraryScrollRef,
@@ -1721,6 +1724,7 @@ export default function SpotifyLibraryModal({
                                                                     onClick={
                                                                         undefined
                                                                     }
+                                                                    autoFocus={isLast}
                                                                     style={{
                                                                         ...browseButtonStyle,
                                                                         width: "auto",
@@ -1747,31 +1751,22 @@ export default function SpotifyLibraryModal({
                                                                 </button>
                                                             </Focusable>
                                                             {!isLast && (
-                                                                <Focusable
-                                                                    key={item.uri + "-slash"}
-                                                                    onActivate={() => {}}
+                                                                <span
                                                                     style={{
-                                                                        flex: "0 0 auto",
+                                                                        color:
+                                                                            "var(--gpColor-Grey)",
+                                                                        fontSize:
+                                                                                "12px",
+                                                                        padding:
+                                                                                "0 4px",
+                                                                        lineHeight: 1,
+                                                                        display: "flex",
                                                                         alignItems: "center",
+                                                                        height: "100%",
                                                                     }}
                                                                 >
-                                                                    <span
-                                                                        style={{
-                                                                            color:
-                                                                                "var(--gpColor-Grey)",
-                                                                            fontSize:
-                                                                                "12px",
-                                                                            padding:
-                                                                                "0 4px",
-                                                                            lineHeight: 1,
-                                                                            display: "flex",
-                                                                            alignItems: "center",
-                                                                            height: "100%",
-                                                                        }}
-                                                                    >
-                                                                        /
-                                                                    </span>
-                                                                </Focusable>
+                                                                    /
+                                                                </span>
                                                             )}
                                                         </>
                                                     );
@@ -1975,14 +1970,18 @@ export default function SpotifyLibraryModal({
                                             </div>
                                         </div>
                                     )}
-                                    {renderFocusableHeading(
-                                        browseItem.entity_type === "artist"
-                                            ? "Albums and singles"
-                                            : browseItem.entity_type === "album"
-                                              ? "Tracks"
-                                              : "Playlist tracks",
-                                        detailsScrollRef,
-                                    )}
+                                    {
+                                        renderFocusableHeading(
+                                            browseItem.entity_type ===
+                                                "artist"
+                                                ? "Albums and singles"
+                                                : browseItem.entity_type ===
+                                                  "album"
+                                                ? "Tracks"
+                                                : "Playlist tracks",
+                                            detailsScrollRef,
+                                        )
+                                    }
                                     {contentError && (
                                         <div
                                             style={{
