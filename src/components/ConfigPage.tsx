@@ -9,7 +9,6 @@ import { useEffect, useState } from "react";
 import SpotifyAuth from "./SpotifyAuth";
 void SpotifyAuth;
 import {
-    cancelWebApiAuth,
     cancelPairing,
     getBuildInfo,
     getConfig,
@@ -17,13 +16,10 @@ import {
     getDownloadStatus,
     getPairingStatus,
     getSoloistStatus,
-    getSoloistVersion,
-    getWebApiAuthStatus,
     downloadSoloist,
     restartDaemon,
     saveApiKey,
     saveDeviceName,
-    startWebApiAuth,
     startDaemon,
     startPairing,
     stopDaemon,
@@ -31,7 +27,6 @@ import {
     type DownloadStatus,
     type PairingStatus,
     type SoloistStatus,
-    type WebApiAuthStatus,
 } from "../api";
 import {
     errorColor,
@@ -131,7 +126,6 @@ function shellQuote(value: string): string {
 
 export default function ConfigPage() {
     const [outdated, setOutdated] = useState(false);
-    const [soloistVersion, setSoloistVersion] = useState<string | null>(null);
     const [soloistInstalled, setSoloistInstalled] = useState(false);
     const [soloistPath, setSoloistPath] = useState("soloist");
     const [download, setDownload] = useState<DownloadStatus>({
@@ -145,15 +139,6 @@ export default function ConfigPage() {
     const [savedKey, setSavedKey] = useState("");
     const [deviceName, setDeviceName] = useState("");
     const [savedDeviceName, setSavedDeviceName] = useState("");
-    const [webApiClientId, setWebApiClientId] = useState("");
-    const [webApiStatus, setWebApiStatus] = useState<WebApiAuthStatus>({
-        status: "idle",
-        error: null,
-        authorization_url: null,
-        client_id: "",
-        configured: false,
-    });
-    const [webApiAuthUrl, setWebApiAuthUrl] = useState("");
     const [busy, setBusy] = useState(false);
     const [message, setMessage] = useState<string | null>(null);
     const [status, setStatus] = useState<PairingStatus>({
@@ -188,14 +173,6 @@ export default function ConfigPage() {
                 console.error("solodeck: failed to get build info", e),
             );
 
-        getSoloistVersion()
-            .then((version) => {
-                if (!cancelled) setSoloistVersion(version);
-            })
-            .catch(() => {
-                // soloist not downloaded yet - that's expected until the user clicks download.
-            });
-
         getSoloistStatus()
             .then((s: SoloistStatus) => {
                 if (!cancelled) {
@@ -213,21 +190,9 @@ export default function ConfigPage() {
                 setApiKey(config.api_key);
                 setSavedKey(config.api_key);
                 setDeviceName(config.device_name);
-                setSavedDeviceName(config.device_name);
-                setWebApiClientId(config.web_api_client_id);
+                setSavedDeviceName(deviceName);
             })
             .catch((e) => console.error("solodeck: failed to get config", e));
-
-        getWebApiAuthStatus()
-            .then((auth) => {
-                if (!cancelled) {
-                    setWebApiStatus(auth);
-                    setWebApiAuthUrl(auth.authorization_url ?? "");
-                }
-            })
-            .catch((e) =>
-                console.error("solodeck: failed to get Web API status", e),
-            );
 
         // Pairing may already be running when the page is opened.
         getPairingStatus()
@@ -252,35 +217,6 @@ export default function ConfigPage() {
         };
     }, []);
 
-    useEffect(() => {
-        if (
-            webApiStatus.status !== "pending" &&
-            webApiStatus.status !== "exchanging"
-        ) {
-            return;
-        }
-
-        let cancelled = false;
-        const interval = setInterval(() => {
-            getWebApiAuthStatus()
-            .then((auth) => {
-                if (!cancelled) {
-                    setWebApiStatus(auth);
-                    setWebApiAuthUrl(auth.authorization_url ?? "");
-                }
-            })
-                .catch((e) =>
-                    console.error("solodeck: failed to get Web API status", e),
-                );
-        }, 1000);
-
-        return () => {
-            cancelled = true;
-            clearInterval(interval);
-        };
-    }, [webApiStatus.status]);
-
-    // Poll while soloist waits for the device to be picked in the Spotify app.
     useEffect(() => {
         if (!status.running) return;
 
@@ -439,72 +375,6 @@ export default function ConfigPage() {
             setMessage(`Could not cancel pairing: ${e}`);
         } finally {
             setBusy(false);
-        }
-    };
-
-    const handleWebApiAuth = async () => {
-        setBusy(true);
-        setMessage(null);
-        try {
-            const result = await startWebApiAuth(webApiClientId);
-            if (!result.ok || !result.authorization_url) {
-                setMessage(
-                    result.error ?? "Could not start Spotify Web API authorization.",
-                );
-                return;
-            }
-            setWebApiClientId(webApiClientId.trim());
-            setWebApiAuthUrl(result.authorization_url);
-            setMessage("Choose which browser to use for Spotify authorization.");
-            setWebApiStatus({
-                status: "pending",
-                error: null,
-                authorization_url: result.authorization_url,
-                client_id: webApiClientId.trim(),
-                configured: true,
-            });
-        } catch (e) {
-            setMessage(`Could not start Spotify Web API authorization: ${e}`);
-        } finally {
-            setBusy(false);
-        }
-    };
-
-    const handleOpenAuthInDeckBrowser = () => {
-        if (!webApiAuthUrl) return;
-        try {
-            const openedWindow = window.open(webApiAuthUrl, "_blank");
-            if (!openedWindow) {
-                setMessage(
-                    "The Deck browser could not be opened. Check the browser popup setting and try again.",
-                );
-                return;
-            }
-            setMessage("Opened Spotify authorization in the Deck browser.");
-        } catch (e) {
-            console.error("solodeck: failed to open Deck browser", e);
-            setMessage(`Could not open the Deck browser: ${e}`);
-        }
-    };
-
-    const handleOpenAuthInDefaultBrowser = () => {
-        if (!webApiAuthUrl) return;
-        try {
-            SteamClient.System.OpenInSystemBrowser(webApiAuthUrl);
-            setMessage("Opened Spotify authorization in the default browser.");
-        } catch (e) {
-            console.error("solodeck: failed to open default browser", e);
-            setMessage(`Could not open the default browser: ${e}`);
-        }
-    };
-
-    const handleCancelWebApiAuth = async () => {
-        try {
-            await cancelWebApiAuth();
-            setWebApiAuthUrl("");
-            setWebApiStatus((current) => ({ ...current, status: "idle" }));
-        } catch (e) {
-            setMessage(`Could not cancel Spotify authorization: ${e}`);
         }
     };
 
@@ -812,112 +682,7 @@ export default function ConfigPage() {
             )}
         </PanelSection>
 
-        <PanelSection>
-            <PanelSectionRow>
-                <div style={{ ...hintStyle, fontWeight: 600 }}>
-                    Optional Spotify Web API
-                </div>
-            </PanelSectionRow>
-
-            <PanelSectionRow>
-                <div style={hintStyle}>
-                    The Web API fills in missing track metadata and powers the
-                    QAM library explorer. Reconnect Spotify Web API to grant
-                    private and collaborative playlist access if those
-                    playlists are missing. Status:{" "}
-                    <strong>
-                        {webApiStatus.status === "connected"
-                            ? "Connected"
-                            : webApiStatus.status === "pending" ||
-                                webApiStatus.status === "exchanging"
-                              ? "Waiting for Spotify authorization"
-                              : webApiStatus.status === "error"
-                                ? "Authorization error"
-                                : webApiStatus.configured
-                                  ? "Not authorized"
-                                  : "Not configured"}
-                    </strong>
-                </div>
-            </PanelSectionRow>
-
-            <PanelSectionRow>
-                <TextField
-                    label="Spotify Web API Client ID"
-                    description="Create a Spotify app and add http://127.0.0.1:48256/callback as a Redirect URI. Loopback HTTP is allowed by Spotify; this is not the Soloist API key."
-                    value={webApiClientId}
-                    onChange={(event) => {
-                        setWebApiClientId(event.target.value);
-                        setWebApiAuthUrl("");
-                    }}
-                />
-            </PanelSectionRow>
-
-            <PanelSectionRow>
-                <ButtonItem
-                    layout="below"
-                    onClick={handleWebApiAuth}
-                    disabled={
-                        busy ||
-                        !webApiClientId.trim() ||
-                        webApiStatus.status === "pending" ||
-                        webApiStatus.status === "exchanging"
-                    }
-                >
-                    {webApiStatus.status === "connected"
-                        ? "Reconnect Spotify Web API"
-                        : "Set up Spotify Web API"}
-                </ButtonItem>
-            </PanelSectionRow>
-
-            {webApiAuthUrl && (
-                <>
-                    <PanelSectionRow>
-                        <ButtonItem
-                            layout="below"
-                            onClick={handleOpenAuthInDefaultBrowser}
-                        >
-                            Open in default browser
-                        </ButtonItem>
-                    </PanelSectionRow>
-                    <PanelSectionRow>
-                        <ButtonItem
-                            layout="below"
-                            onClick={handleOpenAuthInDeckBrowser}
-                        >
-                            Open in Deck browser
-                        </ButtonItem>
-                    </PanelSectionRow>
-                    <PanelSectionRow>
-                        <div style={hintStyle}>
-                            Spotify will return to this Deck after you authorize.
-                        </div>
-                    </PanelSectionRow>
-                    <PanelSectionRow>
-                        <ButtonItem
-                            layout="below"
-                            onClick={handleCancelWebApiAuth}
-                        >
-                            Cancel Spotify authorization
-                        </ButtonItem>
-                    </PanelSectionRow>
-                </>
-            )}
-
-            {webApiStatus.error && (
-                <PanelSectionRow>
-                    <div style={{ ...hintStyle, color: errorColor }}>
-                        {webApiStatus.error}
-                    </div>
-                </PanelSectionRow>
-            )}
-
-            <PanelSectionRow>
-                <div style={hintStyle}>
-                    {soloistVersion ?? "soloist unavailable"}
-                </div>
-            </PanelSectionRow>
-        </PanelSection>
-
+        <SpotifyAuth />
         </>
     );
 }

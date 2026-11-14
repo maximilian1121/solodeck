@@ -9,7 +9,7 @@ import {
 } from "@decky/ui";
 import type { ReactNode } from "react";
 import { FaSpotify } from "react-icons/fa";
-import QamPanel from "./components/QamPanel";
+import SpotifyAuth from "./components/SpotifyAuth";
 
 // solodeck gets its own icon in Steam's Quick Access tab strip (next to
 // Steam's tabs and Decky's own). Decky's tabs hook cannot be used for that:
@@ -45,13 +45,13 @@ function buildQamTab(visible: boolean): QamTab {
     solodeckInstance: qamInstance,
     panel: (
       <ErrorBoundary>
-        <QamPanel />
+        <SpotifyAuth />
       </ErrorBoundary>
     ),
   };
 }
 
-// Keeps exactly one solodeck tab in Steam's QAM tab array: drops copies left
+// Keeps exactly one solodeck tab in Steam's tab array: drops copies left
 // by earlier renders/reloads, adds a fresh one after a reload and otherwise
 // leaves the existing tab (and its mounted panel) alone.
 function syncQamTabs(tabs: any[], visible: boolean) {
@@ -159,7 +159,7 @@ export function installQamTab() {
 export function uninstallQamTab() {
   qamTabActive = false;
   if (qamInstallRetry !== null) {
-    clearInterval(qamInstallRetry);
+    clearInterval(qamInstallRetry!);
     qamInstallRetry = null;
   }
   for (const patch of qamPatches.splice(0)) patch.unpatch();
