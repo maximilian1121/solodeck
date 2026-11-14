@@ -656,6 +656,7 @@ export default function SpotifyLibraryModal({
         item: SpotifyBrowseItem,
         parentItem: SpotifyBrowseItem | null = null,
         forceRefresh = false,
+        resetBreadcrumbs = true,
     ) => {
         const requestId = ++contentRequestRef.current;
         const cachedPage = explorerCache.pages[item.uri];
@@ -689,11 +690,21 @@ export default function SpotifyLibraryModal({
         setContentError("");
         if (item.entity_type === "home") {
             setContentLoading(false);
+            setBreadcrumbPath([]);
             return;
         }
-        // Reset breadcrumbs when opening from library sidebar or search
-        // (breadcrumb clicks call setBrowseItem directly, not openBrowseItem)
-        setBreadcrumbPath([HomeBrowseItem, item]);
+        if (resetBreadcrumbs) {
+            // Library sidebar or search navigation - start fresh breadcrumb trail
+            setBreadcrumbPath([item]);
+        } else {
+            // Browse page content navigation - append to breadcrumb trail
+            setBreadcrumbPath((prev) => {
+                if (prev.length > 0 && prev[prev.length - 1].uri === item.uri) {
+                    return prev;
+                }
+                return [...prev, item];
+            });
+        }
         setContentLoading(!hasCachedTrackPage || forceRefresh);
         try {
             if (item.entity_type === "playlist") {
@@ -1657,6 +1668,7 @@ export default function SpotifyLibraryModal({
                                 <>
                                     {breadcrumbPath.length > 0 && (
                                         <div
+                                            flow-children="horizontal"
                                             style={{
                                                 display: "flex",
                                                 alignItems: "center",
@@ -1675,27 +1687,19 @@ export default function SpotifyLibraryModal({
                                                         <Focusable
                                                             key={item.uri}
                                                             onActivate={() => {
-                                                                // Navigate to this breadcrumb item
-                                                                setBrowseItem(item);
+                                                                // Navigate to this breadcrumb item: load content and truncate path
+                                                                void openBrowseItem(
+                                                                    item,
+                                                                    null,
+                                                                    false,
+                                                                    false,
+                                                                );
                                                                 setBreadcrumbPath(
                                                                     breadcrumbPath.slice(
                                                                         0,
                                                                         index + 1,
                                                                     ),
                                                                 );
-                                                                if (
-                                                                    item.entity_type ===
-                                                                    "home"
-                                                                ) {
-                                                                    setAlbums([]);
-                                                                    setAlbumsNextOffset(
-                                                                        null,
-                                                                    );
-                                                                    setLoadingMoreAlbums(
-                                                                        false,
-                                                                    );
-                                                                    setTracks([]);
-                                                                }
                                                             }}
                                                             style={{
                                                                 flex:
@@ -2034,6 +2038,8 @@ export default function SpotifyLibraryModal({
                                                         "artist"
                                                         ? browseItem
                                                         : null,
+                                                    false,
+                                                    false,
                                                 ),
                                         ),
                                     )}
