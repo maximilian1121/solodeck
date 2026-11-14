@@ -822,28 +822,6 @@ export default function SpotifyLibraryModal({
         }
     };
 
-    const returnToBrowseParent = () => {
-        // Pop the current item from breadcrumb path and navigate to previous
-        setBreadcrumbPath((prev) => {
-            if (prev.length <= 1) {
-                return [];
-            }
-            return prev.slice(0, prev.length - 1);
-        });
-        const parent = parentBrowseItem;
-        setParentBrowseItem(null);
-        if (parent) {
-            void openBrowseItem(parent);
-            return;
-        }
-        ++contentRequestRef.current;
-        setBrowseItem(HomeBrowseItem);
-        setAlbums([]);
-        setAlbumsNextOffset(null);
-        setLoadingMoreAlbums(false);
-        setTracks([]);
-        setContentError("");
-    };
 
     const playTrack = async (
         item: TrackItem,
@@ -1682,8 +1660,8 @@ export default function SpotifyLibraryModal({
                                             style={{
                                                 display: "flex",
                                                 alignItems: "center",
-                                                gap: "4px",
-                                                marginBottom: "12px",
+                                                gap: "2px",
+                                                marginBottom: "8px",
                                                 flexWrap: "wrap",
                                             }}
                                         >
@@ -1736,7 +1714,7 @@ export default function SpotifyLibraryModal({
                                                                     ...browseButtonStyle,
                                                                     width: "auto",
                                                                     padding:
-                                                                        "4px 8px",
+                                                                        "2px 6px",
                                                                     background:
                                                                         isLast
                                                                             ? "rgba(255,255,255,0.08)"
@@ -1744,9 +1722,16 @@ export default function SpotifyLibraryModal({
                                                                     border: isLast
                                                                         ? "1px solid var(--gpSystem-Separator)"
                                                                         : undefined,
+                                                                    color:
+                                                                        isLast
+                                                                            ? "inherit"
+                                                                            : "var(--gpColor-Grey)",
+                                                                    opacity:
+                                                                        isLast
+                                                                            ? 1
+                                                                            : 0.7,
                                                                 }}
                                                             >
-                                                                {isLast ? "" : ""}{" "}
                                                                 {item.name}
                                                             </button>
                                                             {!isLast && (
@@ -1755,6 +1740,8 @@ export default function SpotifyLibraryModal({
                                                                         color:
                                                                             "var(--gpColor-Grey)",
                                                                         fontSize: "12px",
+                                                                        padding:
+                                                                            "0 4px",
                                                                     }}
                                                                 >
                                                                     /
@@ -1764,43 +1751,6 @@ export default function SpotifyLibraryModal({
                                                     );
                                                 },
                                             )}
-                                        </div>
-                                    )}
-                                    {parentBrowseItem && (
-                                        <div
-                                            style={{
-                                                display: "flex",
-                                                alignItems: "center",
-                                                gap: "12px",
-                                                marginBottom: "12px",
-                                            }}
-                                        >
-                                            <Focusable
-                                                onActivate={
-                                                    returnToBrowseParent
-                                                }
-                                                style={{
-                                                    flex: "0 0 auto",
-                                                }}
-                                            >
-                                                <button
-                                                    type="button"
-                                                    tabIndex={-1}
-                                                    onClick={
-                                                        returnToBrowseParent
-                                                    }
-                                                    style={{
-                                                        ...browseButtonStyle,
-                                                        width: "auto",
-                                                        padding: "6px 10px",
-                                                        background:
-                                                            "rgba(255,255,255,0.08)",
-                                                    }}
-                                                >
-                                                    Back to{" "}
-                                                    {parentBrowseItem.name}
-                                                </button>
-                                            </Focusable>
                                         </div>
                                     )}
                                     <Focusable
@@ -1814,48 +1764,138 @@ export default function SpotifyLibraryModal({
                                         <div
                                             style={{
                                                 display: "flex",
-                                                alignItems: "center",
-                                                gap: "14px",
+                                                flexDirection: "column",
+                                                gap: "8px",
                                                 paddingBottom: "16px",
                                             }}
                                         >
-                                            {browseImage(
-                                                browseItem.image_url === "/"
-                                                    ? undefined
-                                                    : browseItem.image_url,
-                                                browseItem.entity_type ===
-                                                    "artist",
-                                                72,
-                                                false,
-                                                browseItem.icon,
-                                            )}
-                                            <div style={{ minWidth: 0 }}>
+                                            <div
+                                                style={{
+                                                    display: "flex",
+                                                    justifyContent: "space-between",
+                                                    alignItems: "center",
+                                                    flexWrap: "wrap",
+                                                    gap: "8px",
+                                                }}
+                                            >
                                                 <div
                                                     style={{
-                                                        fontSize: "20px",
-                                                        fontWeight: 600,
-                                                        overflowWrap:
-                                                            "anywhere",
+                                                        display: "flex",
+                                                        alignItems: "center",
+                                                        gap: "14px",
                                                     }}
                                                 >
-                                                    {browseItem.name}
-                                                </div>
-                                                {browseItem.entity_type !==
-                                                    "artist" && (
-                                                    <div
-                                                        style={{
-                                                            color: "var(--gpColor-Grey)",
-                                                            fontSize: "13px",
-                                                            paddingTop: "3px",
-                                                        }}
-                                                    >
-                                                        {browseItem.entity_type ===
-                                                        "album"
-                                                            ? "Album"
-                                                            : "Playlist"}
+                                                    {browseImage(
+                                                        browseItem.image_url === "/"
+                                                            ? undefined
+                                                            : browseItem.image_url,
+                                                        browseItem.entity_type ===
+                                                            "artist",
+                                                        72,
+                                                        false,
+                                                        browseItem.icon,
+                                                    )}
+                                                    <div style={{ minWidth: 0 }}>
+                                                        <div
+                                                            style={{
+                                                                fontSize: "20px",
+                                                                fontWeight: 600,
+                                                                overflowWrap:
+                                                                    "anywhere",
+                                                            }}
+                                                        >
+                                                            {browseItem.name}
+                                                        </div>
+                                                        {browseItem.entity_type !==
+                                                            "artist" && (
+                                                            <div
+                                                                style={{
+                                                                    color: "var(--gpColor-Grey)",
+                                                                    fontSize: "13px",
+                                                                    paddingTop: "3px",
+                                                                }}
+                                                            >
+                                                                {browseItem.entity_type === "album" ? "Album" : "Playlist"}
+                                                            </div>
+                                                        )}
                                                     </div>
+                                                </div>
+                                                {(browseItem.entity_type === "playlist" ||
+                                                    browseItem.entity_type ===
+                                                        "album") && (
+                                                    <Focusable
+                                                        onActivate={() => {
+                                                            if (
+                                                                contentLoading ||
+                                                                refreshCooldownSeconds > 0
+                                                            ) {
+                                                                return;
+                                                            }
+                                                            void openBrowseItem(
+                                                                browseItem,
+                                                                parentBrowseItem,
+                                                                true,
+                                                            );
+                                                        }}
+                                                        style={{ width: "auto" }}
+                                                    >
+                                                        <button
+                                                            type="button"
+                                                            tabIndex={-1}
+                                                            disabled={
+                                                                contentLoading ||
+                                                                refreshCooldownSeconds > 0
+                                                            }
+                                                            onClick={() =>
+                                                                contentLoading ||
+                                                                refreshCooldownSeconds > 0
+                                                                    ? undefined
+                                                                    : void openBrowseItem(
+                                                                          browseItem,
+                                                                          parentBrowseItem,
+                                                                          true,
+                                                                      )
+                                                            }
+                                                            style={{
+                                                                ...browseButtonStyle,
+                                                                ...quietMessageStyle,
+                                                                alignItems: "center",
+                                                                display: "flex",
+                                                                gap: "6px",
+                                                                justifyContent: "center",
+                                                                cursor:
+                                                                    contentLoading ||
+                                                                    refreshCooldownSeconds >
+                                                                        0
+                                                                        ? "default"
+                                                                        : "pointer",
+                                                                opacity:
+                                                                    contentLoading ||
+                                                                    refreshCooldownSeconds >
+                                                                        0
+                                                                        ? 0.6
+                                                                        : 1,
+                                                            }}
+                                                        >
+                                                            <FaSyncAlt aria-hidden="true" />
+                                                            {contentLoading
+                                                                ? "Refreshing..."
+                                                                : refreshCooldownSeconds > 0
+                                                                  ? `Refresh in ${refreshCooldownSeconds}s`
+                                                                  : "Refresh"}
+                                                        </button>
+                                                    </Focusable>
                                                 )}
                                             </div>
+                                            <div
+                                                style={{
+                                                    display: "flex",
+                                                    alignItems: "center",
+                                                    gap: "14px",
+                                                    paddingBottom: "8px",
+                                                }}
+                                            >
+                                        </div>
                                         </div>
                                     </Focusable>
                                     {quotaUntil !== null && (
