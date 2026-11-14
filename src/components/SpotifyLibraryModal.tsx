@@ -1692,77 +1692,88 @@ export default function SpotifyLibraryModal({
                                                         breadcrumbPath.length -
                                                             1;
                                                     return (
-                                                        <Focusable
-                                                            key={item.uri}
-                                                            onActivate={() => {
-                                                                void openBrowseItem(
-                                                                    item,
-                                                                    null,
-                                                                    false,
-                                                                    false,
-                                                                );
-                                                                setBreadcrumbPath(
-                                                                    breadcrumbPath.slice(
-                                                                        0,
-                                                                        index +
-                                                                            1,
-                                                                    ),
-                                                                );
-                                                            }}
-                                                            style={{
-                                                                flex: "0 0 auto",
-                                                                alignItems: "center",
-                                                            }}
-                                                        >
-                                                            <button
-                                                                type="button"
-                                                                tabIndex={-1}
-                                                                onClick={
-                                                                    undefined
-                                                                }
+                                                        <>
+                                                            <Focusable
+                                                                key={item.uri}
+                                                                onActivate={() => {
+                                                                    void openBrowseItem(
+                                                                        item,
+                                                                        null,
+                                                                        false,
+                                                                        false,
+                                                                    );
+                                                                    setBreadcrumbPath(
+                                                                        breadcrumbPath.slice(
+                                                                            0,
+                                                                            index +
+                                                                                1,
+                                                                        ),
+                                                                    );
+                                                                }}
                                                                 style={{
-                                                                    ...browseButtonStyle,
-                                                                    width: "auto",
-                                                                    padding:
-                                                                        "2px 6px",
-                                                                    background:
-                                                                        isLast
-                                                                            ? "rgba(255,255,255,0.08)"
-                                                                            : "transparent",
-                                                                    border: isLast
-                                                                        ? "1px solid var(--gpSystem-Separator)"
-                                                                        : undefined,
-                                                                    color: isLast
-                                                                        ? "inherit"
-                                                                        : "var(--gpColor-Grey)",
-                                                                    opacity:
-                                                                        isLast
-                                                                            ? 1
-                                                                            : 0.7,
-                                                                    lineHeight: 1,
+                                                                    flex: "0 0 auto",
+                                                                    alignItems: "center",
                                                                 }}
                                                             >
-                                                                {item.name}
-                                                            </button>
-                                                            {!isLast && (
-                                                                <span
+                                                                <button
+                                                                    type="button"
+                                                                    tabIndex={-1}
+                                                                    onClick={
+                                                                        undefined
+                                                                    }
                                                                     style={{
-                                                                        color:
-                                                                            "var(--gpColor-Grey)",
-                                                                        fontSize:
-                                                                            "12px",
+                                                                        ...browseButtonStyle,
+                                                                        width: "auto",
                                                                         padding:
-                                                                            "0 4px",
+                                                                            "2px 6px",
+                                                                        background:
+                                                                            isLast
+                                                                                ? "rgba(255,255,255,0.08)"
+                                                                                : "transparent",
+                                                                        border: isLast
+                                                                                ? "1px solid var(--gpSystem-Separator)"
+                                                                                : undefined,
+                                                                        color: isLast
+                                                                                ? "inherit"
+                                                                                : "var(--gpColor-Grey)",
+                                                                        opacity:
+                                                                            isLast
+                                                                                ? 1
+                                                                                : 0.7,
                                                                         lineHeight: 1,
-                                                                        display: "flex",
-                                                                        alignItems: "center",
-                                                                        height: "100%",
                                                                     }}
                                                                 >
-                                                                    /
-                                                                </span>
+                                                                    {item.name}
+                                                                </button>
+                                                            </Focusable>
+                                                            {!isLast && (
+                                                                <Focusable
+                                                                    key={item.uri + "-slash"}
+                                                                    onActivate={() => {}}
+                                                                    style={{
+                                                                        flex: "0 0 auto",
+                                                                        alignItems: "center",
+                                                                    }}
+                                                                >
+                                                                    <span
+                                                                        style={{
+                                                                            color:
+                                                                                "var(--gpColor-Grey)",
+                                                                            fontSize:
+                                                                                "12px",
+                                                                            padding:
+                                                                                "0 4px",
+                                                                            lineHeight: 1,
+                                                                            display: "flex",
+                                                                            alignItems: "center",
+                                                                            height: "100%",
+                                                                        }}
+                                                                    >
+                                                                        /
+                                                                    </span>
+                                                                </Focusable>
                                                             )}
-                                                        </Focusable>
+                                                        </>
                                                     );
                                                 },
                                             )}
