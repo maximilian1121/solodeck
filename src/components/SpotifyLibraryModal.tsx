@@ -1086,7 +1086,7 @@ export default function SpotifyLibraryModal({
                     overflow: "hidden",
                 }}
             >
-                <Focusable
+                {/* <Focusable
                     onActivate={(event) => {
                         event.stopPropagation();
                     }}
@@ -1103,7 +1103,7 @@ export default function SpotifyLibraryModal({
                             }
                         }}
                     />
-                </Focusable>
+                </Focusable> */}
                 <Focusable
                     flow-children="horizontal"
                     style={{
