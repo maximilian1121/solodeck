@@ -1,99 +1,124 @@
-# Decky Plugin Template [![Chat](https://img.shields.io/badge/chat-on%20discord-7289da.svg)](https://deckbrew.xyz/discord)
+# solodeck
 
-Reference example for using [decky-frontend-lib](https://github.com/SteamDeckHomebrew/decky-frontend-lib) (@decky/ui) in a [decky-loader](https://github.com/SteamDeckHomebrew/decky-loader) plugin.
+A [Decky Loader](https://decky.xyz/) plugin that runs [Spotify Soloist](https://github.com/spotify/soloist) — the official Spotify Connect CLI/daemon for headless or custom applications that use Spotify Connect — on your Steam Deck.
 
-### **Please also refer to the [wiki](https://wiki.deckbrew.xyz/en/user-guide/home#plugin-development) for important information on plugin development and submissions/updates. currently documentation is split between this README and the wiki which is something we are hoping to rectify in the future.**  
+The plugin appears as its own icon in the Steam Quick Access Menu tab strip (next to Steam's tabs and Decky's own), so it is one button away without going through Decky's plugin list. The Quick Access page itself is intentionally just a title; configuration lives in the plugin's page in Decky.
 
-## Developers
+## Spotify Soloist (downloaded at runtime)
 
-### Dependencies
+**soloist is NOT bundled with this plugin.** Spotify does not allow redistributing the soloist binary, so the plugin downloads it on demand from Spotify's official builds:
 
-This template relies on the user having Node.js v16.14+ and `pnpm` (v9) installed on their system.  
-Please make sure to install pnpm v9 to prevent issues with CI during plugin submission.  
-`pnpm` can be downloaded from `npm` itself which is recommended.
+1. Open the plugin's page in Decky.
+2. Click **Download Soloist** — this fetches the official `soloist_release_x86_64.tar.gz` from `soloist-builds.spotifycdn.com` and installs it into Decky's runtime data dir (`~/homebrew/data/solodeck/soloist/soloist`), where it persists across plugin updates.
+3. Once downloaded, you can pair and start the daemon.
 
-#### Linux
+Soloist builds expire after 90 days. When your downloaded build expires, click **Download Soloist** again to fetch a newer build.
+
+## Configuration
+
+Open the plugin in Decky's Quick Access tab to:
+
+- enter the **Spotify Soloist API key** (generated from Spotify for Developers; the account must have Premium),
+- **start pairing**: soloist advertises itself as the "Steam Deck" Spotify Connect device, and once it is selected in the Spotify app it stores the session and exits.
+
+The API key is stored in Decky's plugin settings directory
+(`~/homebrew/settings/solodeck/settings.json`, mode `0600`). soloist has no
+config file or environment variable for the key, so it is passed on the command
+line and is therefore visible to `ps` while pairing or the daemon runs.
+
+### Optional Spotify Web API
+
+The QAM uses Soloist's WebSocket data first. If a current or queued track is
+missing a useful title, Solodeck can use the Spotify Web API to fill in the
+track name, artist, and album artwork. This feature is optional and does not
+control playback.
+
+To enable it, create a Spotify app in the
+[Spotify Developer Dashboard](https://developer.spotify.com/dashboard), copy
+its **Client ID** (not a client secret or the Soloist API key), and enter it in
+the Web API section of the plugin configuration. Add
+`http://127.0.0.1:48256/callback` as an allowed Redirect URI, then select
+**Set up Spotify Web API** and finish authorization in the Steam Deck's
+browser. Authorization uses PKCE and a temporary callback server bound only to
+the Deck's loopback interface on port 48256. Spotify allows HTTP for explicit
+loopback IP redirect URIs, so this local callback does not need TLS and does not
+use ports 80 or 443.
+After starting authorization, choose **Open in default browser** or **Open in
+Deck browser**. Spotify redirects to the Deck's local callback after approval.
+
+OAuth tokens are stored in the private settings file. Track metadata is cached
+locally for up to 30 days, with a maximum of 500 entries. Configuration shows
+whether Web API authorization is connected. The QAM explorer uses this
+authorization to browse playlists and followed artists, search Spotify, and
+start a selected track in its playlist or album context. Reconnect Spotify Web
+API in configuration if access is denied after an authorization-scope update.
+Leaving the Client ID empty keeps this integration disabled.
+
+## The daemon
+
+Once the device is paired, the plugin keeps **soloist** running as a daemon for
+as long as the plugin is loaded, so the Steam Deck stays available as a Spotify
+Connect device. It starts automatically after pairing and whenever the plugin
+loads (including after a plugin update or reload).
+
+The same page shows the daemon state and has **Start Soloist daemon**, **Stop
+Soloist daemon** and **Restart Soloist daemon** controls. Stopping is remembered:
+the daemon stays stopped across plugin reloads until it is started again.
+Changing the API key requires a restart to take effect.
+
+The daemon is supervised: if it exits unexpectedly after running normally it is
+restarted automatically. A process that fails immediately (invalid API key,
+another soloist instance holding the data directory, an expired soloist build)
+is not restarted in a loop; the reason is shown on the plugin page and in the
+log at `~/homebrew/logs/solodeck/`.
+
+Starting a new pairing stops the daemon first, because pairing clears the
+stored session and soloist does not allow two instances to share its data
+directory.
+
+The daemon enables soloist's WebSocket API on an OS-assigned loopback port
+(`--ws 127.0.0.1:35797`); it is not reachable from the network. The QAM panel
+connects directly to this WebSocket for playback updates, without polling the
+Python backend. On Linux, Soloist uses the system's default PipeWire output
+(and falls back to PulseAudio if PipeWire is unavailable); no output device is
+forced by the plugin. The plugin automatically supplies the user's runtime
+directory to Soloist when needed so it can find the audio session; no manual
+PipeWire environment setup is required.
+
+## Requirements
+
+- Decky Loader 3.x
+- Network access to download soloist (or set `SOLOIST_RELEASE_URL` to a local
+  mirror before downloading)
+
+## Building
 
 ```bash
-sudo npm i -g pnpm@9
+python3 build.py
 ```
 
-If you would like to build plugins that have their own custom backends, Docker is required as it is used by the Decky CLI tool.
+`build.py` compiles the frontend and packages the plugin into
+`solodeck-v<version>.zip`. The plugin version is just the package version
+(e.g. `1.0`) — it is **not** tied to a soloist build, because soloist is
+downloaded separately at runtime. The archive does not contain a soloist
+binary.
 
-### Making your own plugin
+Every push to `main` triggers a GitHub Actions build and creates a GitHub
+Release with the packaged plugin ZIP attached. Each release has a unique
+`main-<run>-<commit>` tag; the plugin version inside the ZIP remains the
+version from `package.json`.
 
-1. You can fork this repo or utilize the "Use this template" button on Github.
-2. In your local fork/own plugin-repository run these commands:
-   1. ``pnpm i``
-   2. ``pnpm run build``
-   - These setup pnpm and build the frontend code for testing.
-3. Consult the [decky-frontend-lib](https://github.com/SteamDeckHomebrew/decky-frontend-lib) repository for ways to accomplish your tasks.
-   - Documentation and examples are still rough, 
-   - Decky loader primarily targets Steam Deck hardware so keep this in mind when developing your plugin.
-4. If using VSCodium/VSCode, run the `setup` and `build` and `deploy` tasks. If not using VSCodium etc. you can derive your own makefile or just manually utilize the scripts for these commands as you see fit.
+## Deploying
 
-If you use VSCode or it's derivatives (we suggest [VSCodium](https://vscodium.com/)!) just run the `setup` and `build` tasks. It's really that simple.
-
-#### Other important information
-
-Everytime you change the frontend code (`index.tsx` etc) you will need to rebuild using the commands from step 2 above or the build task if you're using vscode or a derivative.
-
-Note: If you are receiving build errors due to an out of date library, you should run this command inside of your repository:
+This is a local-only deploy tool (the Steam Deck is not reachable over SSH
+from this machine):
 
 ```bash
-pnpm update @decky/ui --latest
+python3 deploy.py            # build + install into local Decky
+python3 deploy.py --local    # same as above (explicit)
+python3 deploy.py --no-build # install the newest existing zip
 ```
 
-### Backend support
-
-If you are developing with a backend for a plugin and would like to submit it to the [decky-plugin-database](https://github.com/SteamDeckHomebrew/decky-plugin-database) you will need to have all backend code located in ``backend/src``, with backend being located in the root of your git repository.
-When building your plugin, the source code will be built and any finished binary or binaries will be output to ``backend/out`` (which is created during CI.)
-If your buildscript, makefile or any other build method does not place the binary files in the ``backend/out`` directory they will not be properly picked up during CI and your plugin will not have the required binaries included for distribution.
-
-Example:  
-In our makefile used to demonstrate the CI process of building and distributing a plugin backend, note that the makefile explicitly creates the `out` folder (``backend/out``) and then compiles the binary into that folder. Here's the relevant snippet.
-
-```make
-hello:
-	mkdir -p ./out
-	gcc -o ./out/hello ./src/main.c
-```
-
-The CI does create the `out` folder itself but we recommend creating it yourself if possible during your build process to ensure the build process goes smoothly.
-
-Note: When locally building your plugin it will be placed into a folder called 'out' this is different from the concept described above.
-
-The out folder is not sent to the final plugin, but is then put into a ``bin`` folder which is found at the root of the plugin's directory.  
-More information on the bin folder can be found below in the distribution section below.
-
-### Distribution
-
-We recommend following the instructions found in the [decky-plugin-database](https://github.com/SteamDeckHomebrew/decky-plugin-database) on how to get your plugin up on the plugin store. This is the best way to get your plugin in front of users.
-You can also choose to do distribution via a zip file containing the needed files, if that zip file is uploaded to a URL it can then be downloaded and installed via decky-loader.
-
-Layout of a plugin zip ready for distribution:
-```
-pluginname-v1.0.0.zip (version number is optional but recommended for users sake)
-   |
-   pluginname/ <directory>
-   |  |  |
-   |  |  bin/ <directory> (optional)
-   |  |     |
-   |  |     binary (optional)
-   |  |
-   |  dist/ <directory> [required]
-   |      |
-   |      index.js [required]
-   | 
-   package.json [required]
-   plugin.json [required]
-   main.py {required if you are using the python backend of decky-loader: serverAPI}
-   README.md (optional but recommended)
-   LICENSE(.md) [required, filename should be roughly similar, suffix not needed]
-```
-
-Note regarding licenses: Including a license is required for the plugin store if your chosen license requires the license to be included alongside usage of source-code/binaries!
-
-Standard procedure for licenses is to have your chosen license at the top of the file, and to leave the original license for the plugin-template at the bottom. If this is not the case on submission to the plugin database, you will be asked to fix this discrepancy.
-
-We cannot and will not distribute your plugin on the Plugin Store if it's license requires it's inclusion but you have not included a license to be re-distributed with your plugin in the root of your git repository.
+It installs into the Decky Loader on this machine (`~/homebrew`) using Decky's
+own install API (no sudo required), then uses Steam's local CEF debug port to
+reload the frontend.
