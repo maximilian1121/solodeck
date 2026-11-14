@@ -32,7 +32,7 @@ import { updatePlaybackSnapshot } from "./playbackSnapshot";
 import SpotifyLibraryModal, { TrackContextMenu } from "./SpotifyLibraryModal";
 
 const SOLOIST_WS_URL = "ws://127.0.0.1:35797";
-const STATE_REFRESH_INTERVAL_MS = 10_000;
+const STATE_REFRESH_INTERVAL_MS = 1_000;
 const ACTION_SETTLE_TIMEOUT_MS = 1500;
 const METADATA_CACHE_MAX_ENTRIES = 500;
 const METADATA_CACHE_TTL_MS = 30 * 60_000;
@@ -735,7 +735,7 @@ export default function QamPanel() {
                 ),
             );
             setPositionMs(estimatedPosition);
-        }, 250);
+        }, 100);
         return () => window.clearInterval(timer);
     }, []);
 
