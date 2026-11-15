@@ -1,18 +1,23 @@
 import { ButtonItem, PanelSection, PanelSectionRow, TextField } from "@decky/ui";
 import { useEffect, useState } from "react";
+import { QRCodeSVG } from "qrcode.react";
 import {
     cancelSpotifyBrowserLogin,
     connectSpotify,
     forgetSpotifySession,
     getAuthStatus,
     getSpotifyBrowserLoginStatus,
+    getSpotifyPasteStatus,
     getSpotifySavedSessionStatus,
     logoutSpotify,
     saveSpotifySession,
     saveSpotifySessionUnencrypted,
     startSpotifyBrowserLogin,
+    startSpotifyPasteServer,
+    stopSpotifyPasteServer,
     unlockSpotifySession,
     unlockSpotifySessionUnencrypted,
+    type SpotifyPasteServerStatus,
 } from "../api";
 
 function clearExplorerCache() {
@@ -37,6 +42,9 @@ export default function SpotifyAuth() {
     const [message, setMessage] = useState<string | null>(null);
     const [browserPending, setBrowserPending] = useState(false);
     const [manual, setManual] = useState(false);
+    const [pasteServer, setPasteServer] = useState<SpotifyPasteServerStatus>({ running: false });
+    const [pasteBusy, setPasteBusy] = useState(false);
+    const [pasteMessage, setPasteMessage] = useState<string | null>(null);
 
     useEffect(() => {
         let mounted = true;
@@ -65,6 +73,54 @@ export default function SpotifyAuth() {
             });
         return () => { mounted = false; };
     }, []);
+
+    useEffect(() => {
+        let mounted = true;
+        getSpotifyPasteStatus()
+            .then((status) => {
+                if (mounted) setPasteServer(status);
+            })
+            .catch(() => {
+                if (mounted) setPasteMessage("Could not check the temporary paste page.");
+            });
+        return () => { mounted = false; };
+    }, []);
+
+    useEffect(() => {
+        if (!pasteServer.running) return;
+        let mounted = true;
+        let checking = false;
+        const check = async () => {
+            if (checking) return;
+            checking = true;
+            try {
+                const status = await getSpotifyPasteStatus();
+                if (!mounted) return;
+                setPasteServer(status);
+                if (!status.running) {
+                    const isConnected = await getAuthStatus();
+                    if (!mounted) return;
+                    if (isConnected) {
+                        clearExplorerCache();
+                        setConnected(true);
+                        setMessage("Spotify connected from the other device.");
+                        setPasteMessage("The one-time paste page has closed.");
+                    } else {
+                        setPasteMessage("The temporary paste page expired or was stopped.");
+                    }
+                }
+            } catch {
+                if (mounted) setPasteMessage("Could not check the temporary paste page.");
+            } finally {
+                checking = false;
+            }
+        };
+        const timer = window.setInterval(() => void check(), 1000);
+        return () => {
+            mounted = false;
+            window.clearInterval(timer);
+        };
+    }, [pasteServer.running]);
 
     useEffect(() => {
         if (!connected) return;
@@ -133,6 +189,46 @@ export default function SpotifyAuth() {
             setMessage("Spotify sign-in cancelled.");
         } catch { setMessage("Could not cancel Spotify sign-in."); }
         finally { setBusy(false); }
+    };
+
+    const startPasteServer = async () => {
+        setPasteBusy(true);
+        setPasteMessage(null);
+        try {
+            const result = await startSpotifyPasteServer();
+            if (result.ok && result.url) {
+                setPasteServer({
+                    running: true,
+                    url: result.url,
+                    urls: result.urls,
+                    expires_in: result.expires_in,
+                });
+                setPasteMessage("Open this address on a trusted device on the same network.");
+            } else {
+                setPasteMessage(result.error ?? "Could not start the temporary paste page.");
+            }
+        } catch {
+            setPasteMessage("Could not start the temporary paste page.");
+        } finally {
+            setPasteBusy(false);
+        }
+    };
+
+    const stopPasteServer = async () => {
+        setPasteBusy(true);
+        try {
+            const result = await stopSpotifyPasteServer();
+            if (result.ok) {
+                setPasteServer({ running: false });
+                setPasteMessage("Temporary paste page stopped.");
+            } else {
+                setPasteMessage(result.error ?? "Could not stop the temporary paste page.");
+            }
+        } catch {
+            setPasteMessage("Could not stop the temporary paste page.");
+        } finally {
+            setPasteBusy(false);
+        }
     };
 
     const connect = async () => {
@@ -231,6 +327,11 @@ export default function SpotifyAuth() {
         finally { setBusy(false); }
     };
 
+    const pasteUrls = pasteServer.urls ?? [];
+    const allPasteUrls = pasteServer.url && !pasteUrls.some((entry) => entry.url === pasteServer.url)
+        ? [{ label: "Primary address", url: pasteServer.url }, ...pasteUrls]
+        : pasteUrls;
+
     return (
         <PanelSection title="Spotify account">
             {loadingStatus ? (
@@ -278,6 +379,94 @@ export default function SpotifyAuth() {
             )}
             {saved && !loadingStatus && !saving && <PanelSectionRow><ButtonItem layout="below" onClick={forget} disabled={busy || browserPending}>Remove saved session</ButtonItem></PanelSectionRow>}
             {message && <PanelSectionRow><div role="status">{message}</div></PanelSectionRow>}
+            <PanelSectionRow>
+                <div
+                    role="alert"
+                    style={{
+                        width: "100%",
+                        boxSizing: "border-box",
+                        border: "3px solid #ff3b30",
+                        borderRadius: "4px",
+                        background: "rgba(255, 59, 48, 0.18)",
+                        color: "#ff766f",
+                        padding: "12px",
+                        fontWeight: 700,
+                        lineHeight: 1.35,
+                    }}
+                >
+                    <div style={{ fontSize: "16px", marginBottom: "8px" }}>
+                        DO NOT DO THIS ON A NETWORK YOU DO NOT FULLY TRUST.
+                        THIS IS PURE HTTP.
+                    </div>
+                    <div style={{ fontWeight: 500 }}>
+                        The temporary page sends your Spotify session cookie
+                        unencrypted over the local network. Anyone able to
+                        monitor that network could steal your account session.
+                        Use only a trusted private network; never use public or
+                        shared Wi-Fi. The page closes after one successful paste
+                        or when its timer expires.
+                    </div>
+                </div>
+            </PanelSectionRow>
+            {pasteServer.running && pasteServer.url ? (
+                <>
+                    <PanelSectionRow>
+                        <div style={{ width: "100%" }}>
+                            <div style={{ fontWeight: 600, marginBottom: "6px" }}>
+                                Temporary paste page is active
+                            </div>
+                            <div style={{ marginBottom: "8px" }}>
+                                On a trusted device already signed in to Spotify,
+                                copy the <code>sp_dc</code> cookie from the desktop
+                browser&apos;s developer tools (Application or Storage → Cookies
+                → open.spotify.com). Then scan this QR code or open one of the
+                addresses below on that device and paste the cookie. Clear its
+                clipboard afterwards.
+                            </div>
+                            <div style={{ display: "flex", justifyContent: "center", padding: "10px", background: "white", borderRadius: "4px" }}>
+                                <QRCodeSVG value={pasteServer.url} size={164} aria-label="Temporary Spotify cookie paste page address" />
+                            </div>
+                            {allPasteUrls
+                                .filter((entry) => entry.url.startsWith("http://"))
+                                .map((entry) => (
+                                    <div key={`${entry.label}-${entry.url}`} style={{ marginTop: "6px", overflowWrap: "anywhere", fontSize: "12px" }}>
+                                        <a
+                                            href={entry.url}
+                                            target="_blank"
+                                            rel="noreferrer"
+                                            style={{ color: "var(--gpColor-Blue, #66c0f4)" }}
+                                        >
+                                            {entry.label}: {entry.url}
+                                        </a>
+                                    </div>
+                                ))}
+                            {pasteServer.expires_in !== undefined && (
+                                <div style={{ marginTop: "6px" }}>
+                                    Expires in about {Math.max(0, Math.ceil(pasteServer.expires_in / 60))} minute(s).
+                                </div>
+                            )}
+                        </div>
+                    </PanelSectionRow>
+                    <PanelSectionRow>
+                        <ButtonItem layout="below" onClick={stopPasteServer} disabled={pasteBusy}>
+                            {pasteBusy ? "Stopping..." : "Stop temporary paste page"}
+                        </ButtonItem>
+                    </PanelSectionRow>
+                </>
+            ) : (
+                <PanelSectionRow>
+                    <ButtonItem layout="below" onClick={startPasteServer} disabled={pasteBusy || busy}>
+                        {pasteBusy ? "Starting..." : "Start temporary LAN paste page"}
+                    </ButtonItem>
+                </PanelSectionRow>
+            )}
+            <PanelSectionRow>
+                <div style={{ fontSize: "13px" }}>
+                    Sign in on a separate device first. This page only transfers
+                    the cookie to SoloDeck; it does not save the cookie on that device.
+                </div>
+            </PanelSectionRow>
+            {pasteMessage && <PanelSectionRow><div role="status">{pasteMessage}</div></PanelSectionRow>}
         </PanelSection>
     );
 }

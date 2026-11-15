@@ -184,6 +184,27 @@ export type SpotifyBrowserLoginStatus = {
     error?: string;
     persistent?: boolean;
 };
+export type SpotifyPasteServerUrl = {
+    label: string;
+    url: string;
+};
+export type SpotifyPasteServerStatus = {
+    running: boolean;
+    url?: string;
+    urls?: SpotifyPasteServerUrl[];
+    expires_in?: number;
+};
+export const getSpotifyPasteStatus = callable<[], SpotifyPasteServerStatus>(
+    "get_spotify_paste_status",
+);
+export const startSpotifyPasteServer = callable<[], ActionResult & {
+    url?: string;
+    urls?: SpotifyPasteServerUrl[];
+    expires_in?: number;
+}>("start_spotify_paste_server");
+export const stopSpotifyPasteServer = callable<[], ActionResult>(
+    "stop_spotify_paste_server",
+);
 export const startSpotifyBrowserLogin = callable<[], ActionResult>("start_spotify_browser_login");
 export const getSpotifyBrowserLoginStatus = callable<[], SpotifyBrowserLoginStatus>("get_spotify_browser_login_status");
 export const cancelSpotifyBrowserLogin = callable<[], ActionResult>("cancel_spotify_browser_login");
