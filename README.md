@@ -133,7 +133,7 @@ A single `.desktop` shortcut is included. Download it, make it executable, run i
    ```bash
    chmod +x solodeck-install.desktop
    ```
-4. Double-click it. A terminal opens, downloads the latest solodeck from GitHub, builds it, installs it into Decky Loader (`~/homebrew/plugins/solodeck`), and reloads the frontend so the new Quick Access Menu tab appears. On failure it shows the error and waits for Enter before closing.
+4. Double-click it. A terminal opens, downloads the latest pre-built plugin zip from GitHub Releases, installs it into Decky Loader (`~/homebrew/plugins/solodeck`) using Decky's own API, and reloads the frontend so the new Quick Access Menu tab appears. On failure it shows the error and waits for Enter before closing. Nothing is built on your machine — just the pre-built zip is downloaded and deployed.
 
-To update to a later version, just run the same shortcut again — it fetches the latest code and reinstalls over the previous version.
+To update to a later version, just run the same shortcut again — it fetches the latest release and reinstalls over the previous version.
 
