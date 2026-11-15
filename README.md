@@ -125,20 +125,15 @@ reload the frontend.
 
 ## One-click install / update from Desktop Mode
 
-A `.desktop` shortcut is included so you can build and install (or update)
-the plugin by clicking an icon in Steam's application launcher:
+A single `.desktop` shortcut is included. Download it, make it executable, run it — that's it:
 
-1. Copy the shortcut into your applications menu:
+1. Download **solodeck-install.desktop** from this repository (e.g. open it on GitHub and click Download, or grab the raw file).
+2. Drag it onto your desktop (or copy to `~/.local/share/applications/`).
+3. Make it executable: right-click → Properties → Permissions → "Allow executing file as program", or run:
    ```bash
-   cp solodeck-install.desktop ~/.local/share/applications/
+   chmod +x solodeck-install.desktop
    ```
-2. Open the **Application Launcher** in Desktop Mode, search for
-   **"Solodeck Install / Update"**, and click it.
-3. A terminal opens, builds the plugin, pushes it into Decky Loader
-   (`~/homebrew/plugins/solodeck`), and reloads the frontend so the new
-   Quick Access Menu tab appears. On failure it shows an error and waits for
-   Enter before closing.
+4. Double-click it. A terminal opens, downloads the latest solodeck from GitHub, builds it, installs it into Decky Loader (`~/homebrew/plugins/solodeck`), and reloads the frontend so the new Quick Access Menu tab appears. On failure it shows the error and waits for Enter before closing.
 
-To update after making changes, just click the shortcut again — it rebuilds
-from the current code and reinstalls over the previous version.
+To update to a later version, just run the same shortcut again — it fetches the latest code and reinstalls over the previous version.
 
