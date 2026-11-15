@@ -40,10 +40,7 @@ const OUTDATED_MESSAGE =
     "This plugin version is out of date! Spotify invalidates soloist builds after 90 days!";
 
 const SOLOIST_INTRO =
-    "Spotify Soloist is the official Spotify Connect CLI/daemon for headless or ";
-("custom applications. This plugin downloads it on demand, configures your ");
-("Spotify API key, pairs the Steam Deck as a Spotify Connect device, and keeps ");
-("the Soloist daemon running so your Deck shows up in Spotify.");
+    "Soloist makes your Steam Deck available as a Spotify Connect device. Set up the device name and API key, pair once, then start the daemon.";
 
 function PairingResult({ status }: { status: PairingStatus }) {
     if (status.error) {
@@ -190,7 +187,7 @@ export default function ConfigPage() {
                 setApiKey(config.api_key);
                 setSavedKey(config.api_key);
                 setDeviceName(config.device_name);
-                setSavedDeviceName(deviceName);
+                setSavedDeviceName(config.device_name);
             })
             .catch((e) => console.error("solodeck: failed to get config", e));
 
@@ -285,6 +282,20 @@ export default function ConfigPage() {
         };
     }, [download.status]);
 
+    useEffect(() => {
+        if (download.status !== "done") return;
+        let cancelled = false;
+        getSoloistStatus()
+            .then((status) => {
+                if (!cancelled) {
+                    setSoloistInstalled(status.installed);
+                    if (status.path) setSoloistPath(status.path);
+                }
+            })
+            .catch((error) => console.error("solodeck: failed to refresh Soloist status", error));
+        return () => { cancelled = true; };
+    }, [download.status]);
+
     const handleSave = async () => {
         setBusy(true);
         setMessage(null);
@@ -334,6 +345,8 @@ export default function ConfigPage() {
                 setMessage(
                     result.error ?? "Could not start the Soloist download.",
                 );
+            } else {
+                setDownload(await getDownloadStatus());
             }
         } catch (e) {
             setMessage(`Could not start the Soloist download: ${e}`);
@@ -439,63 +452,96 @@ export default function ConfigPage() {
 
     return (
         <>
-        <PanelSection>
-            <PanelSectionRow>
-                <div style={{ ...hintStyle, fontWeight: 600 }}>
-                    Spotify Connect
-                </div>
-            </PanelSectionRow>
-            <PanelSectionRow>
-                <div style={hintStyle}>{SOLOIST_INTRO}</div>
-            </PanelSectionRow>
-
-            {outdated && (
+            <PanelSection title="Spotify Connect">
                 <PanelSectionRow>
-                    <div style={warningStyle}>{OUTDATED_MESSAGE}</div>
+                    <div style={hintStyle}>{SOLOIST_INTRO}</div>
                 </PanelSectionRow>
-            )}
-
-            {!soloistInstalled && (
-                <>
+                {outdated && (
                     <PanelSectionRow>
-                        <ButtonItem
-                            layout="below"
-                            onClick={handleDownload}
-                            disabled={
-                                busy ||
-                                download.status === "downloading" ||
-                                download.status === "extracting"
-                            }
-                        >
-                            {download.status === "downloading" ||
-                            download.status === "extracting"
-                                ? `Downloading Soloist... ${download.percent}%`
-                                : "Download Soloist"}
-                        </ButtonItem>
+                        <div style={warningStyle}>{OUTDATED_MESSAGE}</div>
                     </PanelSectionRow>
-                    {download.error && (
+                )}
+                {!soloistInstalled && (
+                    <>
                         <PanelSectionRow>
-                            <div style={{ ...hintStyle, color: errorColor }}>
-                                Download failed: {download.error}
-                            </div>
+                            <ButtonItem
+                                layout="below"
+                                onClick={handleDownload}
+                                disabled={
+                                    busy ||
+                                    download.status === "downloading" ||
+                                    download.status === "extracting"
+                                }
+                            >
+                                {download.status === "downloading"
+                                    ? "Downloading Soloist..."
+                                    : download.status === "extracting"
+                                      ? "Installing Soloist..."
+                                      : "Download Soloist"}
+                            </ButtonItem>
                         </PanelSectionRow>
-                    )}
-                    {download.status === "done" && (
-                        <PanelSectionRow>
-                            <div style={{ ...hintStyle, color: successColor }}>
-                                Soloist downloaded and ready.
-                            </div>
-                        </PanelSectionRow>
-                    )}
-                </>
-            )}
+                        {(download.status === "downloading" ||
+                            download.status === "extracting") && (
+                            <PanelSectionRow>
+                                <div
+                                    style={{ ...hintStyle, width: "100%" }}
+                                    role="status"
+                                    aria-live="polite"
+                                >
+                                    <div>
+                                        {download.status === "extracting"
+                                            ? "Installing Soloist..."
+                                            : download.total > 0
+                                              ? `${Math.min(100, download.percent)}% — ${(download.downloaded / 1048576).toFixed(1)} / ${(download.total / 1048576).toFixed(1)} MiB`
+                                              : `Downloading — ${(download.downloaded / 1048576).toFixed(1)} MiB`}
+                                    </div>
+                                    <progress
+                                        aria-label={
+                                            download.status === "extracting"
+                                                ? "Installing Soloist"
+                                                : "Downloading Soloist"
+                                        }
+                                        max={100}
+                                        value={
+                                            download.status === "downloading" &&
+                                            download.total > 0
+                                                ? Math.min(100, download.percent)
+                                                : undefined
+                                        }
+                                        style={{
+                                            width: "100%",
+                                            marginTop: "8px",
+                                        }}
+                                    />
+                                </div>
+                            </PanelSectionRow>
+                        )}
+                        {download.error && (
+                            <PanelSectionRow>
+                                <div style={{ ...hintStyle, color: errorColor }}>
+                                    Download failed: {download.error}
+                                </div>
+                            </PanelSectionRow>
+                        )}
+                        {download.status === "done" && (
+                            <PanelSectionRow>
+                                <div
+                                    style={{ ...hintStyle, color: successColor }}
+                                >
+                                    Soloist downloaded and ready.
+                                </div>
+                            </PanelSectionRow>
+                        )}
+                    </>
+                )}
+            </PanelSection>
 
             {soloistInstalled && (
-                <>
+                <PanelSection title="Device setup">
                     <PanelSectionRow>
                         <TextField
-                            label="Soloist device name"
-                            description="The name shown in Spotify's device picker. Defaults to 'solodeck'."
+                            label="Device name"
+                            description="This name appears in Spotify's device picker."
                             value={deviceName}
                             onChange={(e) => {
                                 setDeviceName(e.target.value);
@@ -503,11 +549,10 @@ export default function ConfigPage() {
                             }}
                         />
                     </PanelSectionRow>
-
                     <PanelSectionRow>
                         <TextField
-                            label="Spotify Soloist API key"
-                            description="Generate one at Spotify for Developers. The account must have Spotify Premium."
+                            label="Soloist API key"
+                            description="Create a key in Spotify for Developers. Spotify Premium is required."
                             bIsPassword
                             bShowClearAction
                             value={apiKey}
@@ -517,22 +562,20 @@ export default function ConfigPage() {
                             }}
                         />
                     </PanelSectionRow>
-
                     <PanelSectionRow>
                         <div style={{ width: "100%" }}>
                             <div style={{ ...hintStyle, marginBottom: "4px" }}>
-                                Soloist start command preview (API key hidden)
+                                Start command preview (key hidden)
                             </div>
                             <div style={outputStyle}>{startCommand}</div>
                             {(keyChanged || deviceNameChanged) && (
                                 <div style={{ ...hintStyle, marginTop: "4px" }}>
-                                    Starting or restarting the daemon saves
-                                    these current values first.
+                                    Starting or restarting saves these values
+                                    automatically.
                                 </div>
                             )}
                         </div>
                     </PanelSectionRow>
-
                     <PanelSectionRow>
                         <ButtonItem
                             layout="below"
@@ -541,10 +584,9 @@ export default function ConfigPage() {
                                 busy || !deviceName.trim() || !deviceNameChanged
                             }
                         >
-                            Save Device Name
+                            Save device name
                         </ButtonItem>
                     </PanelSectionRow>
-
                     <PanelSectionRow>
                         <ButtonItem
                             layout="below"
@@ -559,130 +601,130 @@ export default function ConfigPage() {
                             Save API key
                         </ButtonItem>
                     </PanelSectionRow>
+                </PanelSection>
+            )}
 
+            <PanelSection title="Pair device">
+                {message && (
                     <PanelSectionRow>
-                        <ButtonItem
-                            layout="below"
-                            onClick={handlePair}
-                            disabled={
-                                busy ||
-                                status.running ||
-                                daemon.running ||
-                                !apiKey.trim()
-                            }
-                        >
-                            Start pairing for soloist
-                        </ButtonItem>
+                        <div style={hintStyle}>{message}</div>
                     </PanelSectionRow>
-                </>
-            )}
-
-            {message && (
-                <PanelSectionRow>
-                    <div style={hintStyle}>{message}</div>
-                </PanelSectionRow>
-            )}
-
-            {(status.running ||
-                status.cancelled ||
-                status.exit_code !== null ||
-                status.error) && (
-                <PanelSectionRow>
-                    <PairingResult status={status} />
-                </PanelSectionRow>
-            )}
-
-            {status.running && (
+                )}
+                {(status.running ||
+                    status.cancelled ||
+                    status.exit_code !== null ||
+                    status.error) && (
+                    <PanelSectionRow>
+                        <PairingResult status={status} />
+                    </PanelSectionRow>
+                )}
                 <PanelSectionRow>
                     <ButtonItem
                         layout="below"
-                        onClick={handleCancel}
-                        disabled={busy}
+                        onClick={handlePair}
+                        disabled={
+                            busy ||
+                            status.running ||
+                            daemon.running ||
+                            !soloistInstalled ||
+                            !apiKey.trim()
+                        }
                     >
-                        Cancel pairing
+                        Pair with Spotify
                     </ButtonItem>
                 </PanelSectionRow>
-            )}
+                {status.running && (
+                    <PanelSectionRow>
+                        <ButtonItem
+                            layout="below"
+                            onClick={handleCancel}
+                            disabled={busy}
+                        >
+                            Cancel pairing
+                        </ButtonItem>
+                    </PanelSectionRow>
+                )}
+                {status.output.length > 0 && (
+                    <PanelSectionRow>
+                        <div style={outputStyle}>
+                            {status.output.slice(-8).join("\n")}
+                        </div>
+                    </PanelSectionRow>
+                )}
+            </PanelSection>
 
-            {status.output.length > 0 && (
+            <PanelSection title="Soloist daemon">
                 <PanelSectionRow>
-                    <div style={outputStyle}>
-                        {status.output.slice(-8).join("\n")}
+                    <div
+                        style={{
+                            ...hintStyle,
+                            color: daemon.running
+                                ? successColor
+                                : daemon.error
+                                  ? errorColor
+                                  : undefined,
+                        }}
+                    >
+                        {daemonSummary(daemon)}
                     </div>
                 </PanelSectionRow>
-            )}
-
-            <PanelSectionRow>
-                <div
-                    style={{
-                        ...hintStyle,
-                        color: daemon.running
-                            ? successColor
-                            : daemon.error
-                              ? errorColor
-                              : undefined,
-                    }}
-                >
-                    {daemonSummary(daemon)}
-                </div>
-            </PanelSectionRow>
-
-            <PanelSectionRow>
-                <ButtonItem
-                    layout="below"
-                    onClick={() =>
-                        handleDaemonAction(daemon.running ? "stop" : "start")
-                    }
-                    disabled={busy || !daemon.paired || !soloistInstalled}
-                >
-                    {daemon.running
-                        ? "Stop Soloist daemon"
-                        : "Start Soloist daemon"}
-                </ButtonItem>
-            </PanelSectionRow>
-
-            <PanelSectionRow>
-                <ButtonItem
-                    layout="below"
-                    onClick={() => handleDaemonAction("restart")}
-                    disabled={
-                        busy ||
-                        !daemon.paired ||
-                        !daemon.running ||
-                        !soloistInstalled
-                    }
-                >
-                    Restart Soloist daemon
-                </ButtonItem>
-            </PanelSectionRow>
-
-            {!daemon.running && daemon.error && daemon.output.length > 0 && (
                 <PanelSectionRow>
-                    <div style={outputStyle}>
-                        {daemon.output.slice(-8).join("\n")}
-                    </div>
+                    <ButtonItem
+                        layout="below"
+                        onClick={() =>
+                            handleDaemonAction(
+                                daemon.running ? "stop" : "start",
+                            )
+                        }
+                        disabled={busy || !daemon.paired || !soloistInstalled}
+                    >
+                        {daemon.running
+                            ? "Stop Soloist"
+                            : "Start Soloist"}
+                    </ButtonItem>
                 </PanelSectionRow>
-            )}
-
-            <PanelSectionRow>
-                <ButtonItem
-                    layout="below"
-                    onClick={() => setLogExpanded(!logExpanded)}
-                >
-                    {logExpanded ? "Hide Soloist log" : "Show Soloist log"}
-                </ButtonItem>
-            </PanelSectionRow>
-
-            {logExpanded && daemon.output.length > 0 && (
                 <PanelSectionRow>
-                    <div style={outputStyle}>
-                        {daemon.output.slice(-20).join("\n")}
-                    </div>
+                    <ButtonItem
+                        layout="below"
+                        onClick={() => handleDaemonAction("restart")}
+                        disabled={
+                            busy ||
+                            !daemon.paired ||
+                            !daemon.running ||
+                            !soloistInstalled
+                        }
+                    >
+                        Restart Soloist
+                    </ButtonItem>
                 </PanelSectionRow>
-            )}
-        </PanelSection>
+                {!daemon.running && daemon.error && daemon.output.length > 0 && (
+                    <PanelSectionRow>
+                        <div style={outputStyle}>
+                            {daemon.output.slice(-8).join("\n")}
+                        </div>
+                    </PanelSectionRow>
+                )}
+            </PanelSection>
 
-        <SpotifyAuth />
+            <PanelSection title="Diagnostics">
+                <PanelSectionRow>
+                    <ButtonItem
+                        layout="below"
+                        onClick={() => setLogExpanded(!logExpanded)}
+                    >
+                        {logExpanded ? "Hide Soloist log" : "Show Soloist log"}
+                    </ButtonItem>
+                </PanelSectionRow>
+                {logExpanded && daemon.output.length > 0 && (
+                    <PanelSectionRow>
+                        <div style={outputStyle}>
+                            {daemon.output.slice(-20).join("\n")}
+                        </div>
+                    </PanelSectionRow>
+                )}
+            </PanelSection>
+
+            <SpotifyAuth />
         </>
     );
 }

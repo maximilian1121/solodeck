@@ -26,33 +26,33 @@ The API key is stored in Decky's plugin settings directory
 config file or environment variable for the key, so it is passed on the command
 line and is therefore visible to `ps` while pairing or the daemon runs.
 
-### Optional Spotify Web API
+### Spotify account and library
 
-The QAM uses Soloist's WebSocket data first. If a current or queued track is
-missing a useful title, solodeck can use the Spotify Web API to fill in the
-track name, artist, and album artwork. This feature is optional and does not
-control playback.
+The Quick Access panel can browse your Spotify library, search, and start a
+track on the paired Soloist device using [SpotAPI](https://github.com/Aran404/SpotAPI).
+This is a separate connection from Soloist and does not require a Spotify Web API
+client ID. SpotAPI uses unofficial Spotify interfaces, which can change or rate
+limit requests.
 
-To enable it, create a Spotify app in the
-[Spotify Developer Dashboard](https://developer.spotify.com/dashboard), copy
-its **Client ID** (not a client secret or the Soloist API key), and enter it in
-the Web API section of the plugin configuration. Add
-`http://127.0.0.1:48256/callback` as an allowed Redirect URI, then select
-**Set up Spotify Web API** and finish authorization in the Steam Deck's
-browser. Authorization uses PKCE and a temporary callback server bound only to
-the Deck's loopback interface on port 48256. Spotify allows HTTP for explicit
-loopback IP redirect URIs, so this local callback does not need TLS and does not
-use ports 80 or 443.
-After starting authorization, choose **Open in default browser** or **Open in
-Deck browser**. Spotify redirects to the Deck's local callback after approval.
+Select **Sign in to Spotify** in the plugin settings and complete Spotify's
+login in the isolated browser window. The plugin includes the browser and its
+libraries; you do not need to install them. If the window cannot open in Gaming
+Mode, try Desktop Mode. This browser flow still needs verification on a Steam
+Deck; **Manual connection** is available if it does not work.
 
-OAuth tokens are stored in the private settings file. Track metadata is cached
-locally for up to 30 days, with a maximum of 500 entries. Configuration shows
-whether Web API authorization is connected. The QAM explorer uses this
-authorization to browse playlists and followed artists, search Spotify, and
-start a selected track in its playlist or album context. Reconnect Spotify Web
-API in configuration if access is denied after an authorization-scope update.
-Leaving the Client ID empty keeps this integration disabled.
+For manual connection, sign in at `open.spotify.com` in a desktop browser. In
+developer tools, open Application (or Storage) → Cookies → `open.spotify.com`,
+copy the value of `sp_dc`, and paste it into the plugin. This cookie grants
+access to your account; treat it like a password. By default the session is kept
+only in memory. After signing in, you can optionally save an encrypted session
+protected by a password you choose. Enter that password after a plugin or Steam
+restart to unlock it; the password is not stored. If you forget it, sign in and
+save a new session. This login does not change the Soloist pairing flow.
+
+Spotify catalogue and library data are cached by the panel for convenience.
+Disconnect the account in settings to clear its current session. The bundled
+SpotAPI dependency is GPL-3.0; its license is included with the dependency in
+the plugin package.
 
 ## The daemon
 

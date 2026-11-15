@@ -9,7 +9,7 @@ import {
 } from "@decky/ui";
 import type { ReactNode } from "react";
 import { FaSpotify } from "react-icons/fa";
-import SpotifyAuth from "./components/SpotifyAuth";
+import QamPanel from "./components/QamPanel";
 
 // solodeck gets its own icon in Steam's Quick Access tab strip (next to
 // Steam's tabs and Decky's own). Decky's tabs hook cannot be used for that:
@@ -45,7 +45,7 @@ function buildQamTab(visible: boolean): QamTab {
     solodeckInstance: qamInstance,
     panel: (
       <ErrorBoundary>
-        <SpotifyAuth />
+        <QamPanel />
       </ErrorBoundary>
     ),
   };

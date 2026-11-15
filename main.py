@@ -2,30 +2,40 @@ import os
 import sys
 
 plugin_dir = os.path.dirname(os.path.realpath(__file__))
-sys.path.append(os.path.join(plugin_dir, "py_modules"))
+# Decky loads main.py via importlib without putting its directory on sys.path.
+# Add it explicitly so the plugin's sibling modules are importable.
+if plugin_dir not in sys.path:
+    sys.path.insert(0, plugin_dir)
+sys.path.insert(0, os.path.join(plugin_dir, "py_modules"))
+
+# Decky's frozen Python may include html but omit html.parser. Supply the
+# parser without replacing an already-loaded standard-library package.
+stdlib_fallback = os.path.join(plugin_dir, "vendor", "python-stdlib")
+sys.path.append(stdlib_fallback)
+import html
+html_fallback = os.path.join(stdlib_fallback, "html")
+if html_fallback not in html.__path__:
+    html.__path__.append(html_fallback)
 
 import asyncio
 import json
 import shutil
 import signal
-import socket
 import subprocess
 import tarfile
 import tempfile
 import time
 import urllib.error
 import urllib.request
-from aiohttp import web
 from collections import deque
 
 
 from spotapi import AsyncClient
+from spotapi_adapter import SpotAPIAdapterMixin
+from spotapi_playback import SpotAPIPlaybackMixin
+from spotapi_browser_login import browser_login_cookie
 
 import decky
-
-# Spotify API (spotapi) QR authentication
-SPOTIFY_AUTH_PORT = 8765
-SPOTIFY_COOKIE_SETTING_KEY = "spotify_cookie"
 
 # Spotify Soloist download archive. Override with SOLOIST_RELEASE_URL for
 # local/offline testing (e.g. a file:// URL to a local tarball).
@@ -72,7 +82,7 @@ def _soloist_bin() -> str:
     return os.path.join(_soloist_root(), "soloist")
 
 
-class Plugin:
+class Plugin(SpotAPIAdapterMixin, SpotAPIPlaybackMixin):
     def __init__(self):
         self._pairing_task: asyncio.Task | None = None
         self._pairing_proc: asyncio.subprocess.Process | None = None
@@ -99,9 +109,13 @@ class Plugin:
             "error": None,
         }
 
-        # Spotify API (spotapi) QR auth server
-        self._auth_runner: web.AppRunner | None = None
-        self._auth_server_task: asyncio.Task | None = None
+        self._spotify_session_cookie: str | None = None
+        self._spotify_restore_lock = asyncio.Lock()
+        self._browser_login_task: asyncio.Task | None = None
+        self._browser_login_status = {"status": "idle"}
+
+    async def _main(self):
+        self._warm_task = asyncio.create_task(self._warm_player_loop())
 
     # Where soloist is expected to live after the user downloads it.
     async def get_soloist_status(self) -> dict:
@@ -178,194 +192,202 @@ class Plugin:
         decky.logger.info(f"Saved Soloist device name: {name}")
         return {"ok": True}
 
-    # --- Spotify API (spotapi) QR authentication ---------------------------
+    # --- Spotify account authentication -----------------------------------
 
-    async def start_qr_auth(self) -> str:
-        """Start a local HTTP server for Spotify QR-code authentication.
-
-        Returns the HTTP URL the user should open on their phone.
-        """
-        await self.stop_qr_auth()
-
-        # Pick a port: try 8765 first, then fall back to a free port.
-        port = SPOTIFY_AUTH_PORT
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        try:
-            sock.bind(("0.0.0.0", port))
-        except OSError:
-            sock.bind(("0.0.0.0", 0))
-            port = sock.getsockname()[1]
-        finally:
-            sock.close()
-
-        # Determine the local LAN IP address.
-        probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        try:
-            probe.connect(("8.8.8.8", 80))
-            local_ip = probe.getsockname()[0]
-        except Exception:
-            local_ip = "127.0.0.1"
-        finally:
-            probe.close()
-
-        app = web.Application()
-        app.router.add_get("/", self._handle_auth_get)
-        app.router.add_post("/submit", self._handle_auth_submit)
-
-        self._auth_runner = web.AppRunner(app)
-        await self._auth_runner.setup()
-        site = web.TCPSite(self._auth_runner, "0.0.0.0", port)
-        await site.start()
-
-        url = f"http://{local_ip}:{port}"
-        decky.logger.info(f"Spotify QR auth server started at {url}")
-        return url
-
-    async def stop_qr_auth(self) -> None:
-        """Stop the local HTTP auth server if running."""
-        if self._auth_runner is not None:
+    async def _spotify_cookie(self) -> str | None:
+        # Restore an opted-in plaintext session on demand, so QAM/library calls
+        # work even when the user has not opened the config screen this launch.
+        if self._spotify_session_cookie:
+            return self._spotify_session_cookie
+        async with self._spotify_restore_lock:
+            if self._spotify_session_cookie:
+                return self._spotify_session_cookie
             try:
-                await self._auth_runner.cleanup()
-            except Exception as error:
-                decky.logger.warning(
-                    f"Error stopping auth server: {error}"
+                cookie = await asyncio.to_thread(
+                    lambda: open(
+                        self._spotify_plaintext_session_path(), encoding="utf-8"
+                    ).read().strip()
                 )
-            self._auth_runner = None
-        self._auth_server_task = None
+            except OSError:
+                return None
+            if not cookie:
+                return None
+            result = await self.connect_spotify(cookie)
+            return self._spotify_session_cookie if result.get("ok") else None
 
     async def get_auth_status(self) -> bool:
-        """Return True if a Spotify cookie is saved in settings."""
-        settings = self._load_settings()
-        return bool(settings.get(SPOTIFY_COOKIE_SETTING_KEY))
+        # Presence does not guarantee that Spotify still accepts the session.
+        return bool(await self._spotify_cookie())
 
-    async def logout_spotify(self) -> dict:
-        """Remove the saved Spotify cookie."""
-        settings = self._load_settings()
-        if SPOTIFY_COOKIE_SETTING_KEY in settings:
-            del settings[SPOTIFY_COOKIE_SETTING_KEY]
-            self._save_settings(settings)
-        await self.stop_qr_auth()
+    async def connect_spotify(self, cookie: str) -> dict:
+        if asyncio.current_task() is not self._browser_login_task:
+            self._browser_login_status = {"status": "idle"}
+        value = (cookie or "").strip()
+        if value.startswith("sp_dc="):
+            value = value[6:]
+        if not value or any(c in value for c in "\r\n;"):
+            return {"ok": False, "error": "Enter the sp_dc cookie value only."}
+        value = "sp_dc=" + value
+        try:
+            client = await asyncio.wait_for(AsyncClient.from_cookies(value), timeout=30)
+            await client.close()
+        except asyncio.TimeoutError:
+            return {"ok": False, "error": "Spotify took too long to respond. Check your connection and try again."}
+        except Exception:
+            # Upstream error details can contain credentials; do not log them.
+            return {"ok": False, "error": "Could not connect to Spotify. Check the cookie and your internet connection, then try again."}
+        self._spotify_session_cookie = value
+        await self._reset_spotify_client()
+        await self._reset_player()
+        return {"ok": True, "persistent": False}
+
+    def _spotify_password_store(self):
+        # This file contains only password-encrypted data, separate from settings.
+        from spotify_password_store import PasswordSessionStore
+        return PasswordSessionStore(os.path.join(decky.DECKY_PLUGIN_SETTINGS_DIR, "spotify-session.enc"))
+
+    async def get_spotify_saved_session_status(self) -> dict:
+        try:
+            encrypted = await asyncio.to_thread(self._spotify_password_store().exists)
+            plaintext = await asyncio.to_thread(os.path.isfile, self._spotify_plaintext_session_path())
+            return {"saved": encrypted or plaintext, "encrypted": encrypted, "unencrypted": plaintext}
+        except Exception:
+            return {"saved": False, "error": "Could not check the saved Spotify session."}
+
+    def _spotify_plaintext_session_path(self) -> str:
+        return os.path.join(decky.DECKY_PLUGIN_SETTINGS_DIR, "spotify-session.txt")
+
+    async def save_spotify_session_unencrypted(self) -> dict:
+        cookie = await self._spotify_cookie()
+        if not cookie:
+            return {"ok": False, "error": "Connect your Spotify account first."}
+        path = self._spotify_plaintext_session_path()
+        try:
+            def write_session():
+                os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+                temporary = path + ".tmp"
+                fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+                try:
+                    with os.fdopen(fd, "w", encoding="utf-8") as output:
+                        output.write(cookie)
+                        output.flush()
+                        os.fsync(output.fileno())
+                    os.replace(temporary, path)
+                finally:
+                    if os.path.exists(temporary):
+                        os.unlink(temporary)
+            await asyncio.to_thread(write_session)
+            return {"ok": True, "encrypted": False}
+        except OSError:
+            return {"ok": False, "error": "Could not save the Spotify session."}
+
+    async def unlock_spotify_session_unencrypted(self) -> dict:
+        path = self._spotify_plaintext_session_path()
+        try:
+            cookie = await asyncio.to_thread(lambda: open(path, encoding="utf-8").read().strip())
+        except OSError:
+            return {"ok": False, "error": "No readable saved Spotify session was found."}
+        return await self.connect_spotify(cookie)
+
+    async def save_spotify_session(self, password: str) -> dict:
+        cookie = await self._spotify_cookie()
+        if not cookie:
+            return {"ok": False, "error": "Connect your Spotify account first."}
+        if not isinstance(password, str) or not password:
+            return {"ok": False, "error": "Enter a password to protect the saved session."}
+        try:
+            await asyncio.to_thread(self._spotify_password_store().save, cookie, password)
+            return {"ok": True}
+        except Exception:
+            # Never expose password, cookie, or cryptographic exception details.
+            return {"ok": False, "error": "Could not save the protected Spotify session."}
+
+    async def unlock_spotify_session(self, password: str) -> dict:
+        if not isinstance(password, str) or not password:
+            return {"ok": False, "error": "Enter your session password."}
+        try:
+            cookie = await asyncio.to_thread(self._spotify_password_store().unlock, password)
+        except Exception:
+            return {"ok": False, "error": "Could not unlock the saved session. Check your password and try again."}
+        # Validate with Spotify before presenting the restored account as connected.
+        return await self.connect_spotify(cookie)
+
+    async def forget_spotify_session(self) -> dict:
+        try:
+            await asyncio.to_thread(self._spotify_password_store().clear)
+            try:
+                os.unlink(self._spotify_plaintext_session_path())
+            except FileNotFoundError:
+                pass
+            return {"ok": True}
+        except Exception:
+            return {"ok": False, "error": "Could not remove the saved Spotify session."}
+
+    async def start_spotify_browser_login(self) -> dict:
+        """Launch an isolated Spotify sign-in and return immediately for UI polling."""
+        if self._browser_login_task and not self._browser_login_task.done():
+            return {"ok": False, "error": "Spotify sign-in is already running."}
+        browser_path = os.path.join(plugin_dir, "playwright-browsers")
+        if os.path.isdir(browser_path):
+            os.environ["PLAYWRIGHT_BROWSERS_PATH"] = browser_path
+        self._browser_login_status = {"status": "pending"}
+        self._browser_login_task = asyncio.create_task(self._run_spotify_browser_login())
         return {"ok": True}
 
-    async def _handle_auth_get(self, request: web.Request) -> web.Response:
-        """Serve the QR-code login form."""
-        html = """<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Spotify Login</title>
-<style>
-    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #121212; color: #fff; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; margin: 0; padding: 20px; box-sizing: border-box; }
-    h1 { color: #1ed760; font-size: 28px; margin-bottom: 8px; }
-    p { color: #a9a9a9; font-size: 16px; text-align: center; max-width: 400px; margin-bottom: 24px; }
-    form { display: flex; flex-direction: column; align-items: center; gap: 16px; width: 100%; max-width: 400px; }
-    input { width: 100%; padding: 14px; border-radius: 4px; border: none; background: #1a1a1a; color: #fff; font-size: 16px; box-sizing: border-box; }
-    button { width: 100%; padding: 14px; border-radius: 4px; border: none; background: #1ed760; color: #000; font-size: 16px; font-weight: 700; cursor: pointer; }
-    button:hover { background: #1ed15c; }
-    .hint { font-size: 13px; color: #666; margin-top: 16px; text-align: center; }
-    .hint a { color: #1ed760; text-decoration: none; }
-    .hint a:hover { text-decoration: underline; }
-</style>
-</head>
-<body>
-<h1>Spotify</h1>
-<p>Paste your Spotify <code>sp_dc</code> cookie below to log in.</p>
-<p class="hint">Get it from <a href="https://open.spotify.com" target="_blank">open.spotify.com</a> in your browser's DevTools (Application → Cookies → sp_dc).</p>
-<form id="form" method="post" action="/submit">
-    <input type="text" name="sp_dc" placeholder="sp_dc=..." required autocomplete="off" autocorrect="off" spellcheck="false">
-    <button type="submit">Sign In</button>
-</form>
-<script>
-document.getElementById('form').addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const formData = new FormData(e.target);
-    const sp_dc = formData.get('sp_dc');
-    const cookie = sp_dc.startsWith('sp_dc=') ? sp_dc : 'sp_dc=' + sp_dc;
-    formData.set('sp_dc', cookie);
-    const res = await fetch('/submit', { method: 'POST', body: formData });
-    if (res.ok) {
-        document.body.innerHTML = '<div style="text-align:center; color:#1ed760; font-size:20px;"><h1 style="color:#1ed760;">Signed in!</h1><p>You can close this page and return to the Deck.</p></div>';
-    } else {
-        const text = await res.text();
-        alert('Login failed: ' + text);
-    }
-});
-</script>
-</body>
-</html>"""
-        return web.Response(text=html, content_type="text/html")
-
-    async def _handle_auth_submit(self, request: web.Request) -> web.Response:
-        """Handle the submitted sp_dc cookie and validate it."""
+    async def _run_spotify_browser_login(self) -> None:
         try:
-            form = await request.post()
+            cookie = await browser_login_cookie()
+            result = await self.connect_spotify(cookie)
+            if result.get("ok"):
+                self._browser_login_status = {
+                    "status": "connected", "persistent": result.get("persistent", False)
+                }
+            else:
+                self._browser_login_status = {"status": "error", "error": result.get("error")}
+        except asyncio.CancelledError:
+            self._browser_login_status = {"status": "cancelled"}
+            raise
+        except TimeoutError:
+            self._browser_login_status = {"status": "error", "error": "Spotify sign-in timed out. Please try again."}
         except Exception:
-            return web.Response(
-                text="Invalid form data.", status=400, content_type="text/html"
-            )
+            # Browser errors may include paths or credentials; never expose them.
+            self._browser_login_status = {"status": "error", "error": (
+                "Could not open Spotify sign-in. Try Desktop Mode and check that the "
+                "plugin's bundled browser is available, or use manual connection below."
+            )}
 
-        cookie = form.get("sp_dc", "")
-        if not isinstance(cookie, str) or not cookie.strip():
-            return web.Response(
-                text="Missing sp_dc cookie.", status=400, content_type="text/html"
-            )
+    async def get_spotify_browser_login_status(self) -> dict:
+        return dict(self._browser_login_status)
 
-        cookie = cookie.strip()
-        if not cookie.startswith("sp_dc="):
-            cookie = "sp_dc=" + cookie
+    async def cancel_spotify_browser_login(self) -> dict:
+        task = self._browser_login_task
+        if task is not None and not task.done():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+            self._browser_login_status = {"status": "cancelled"}
+        return {"ok": True}
 
-        # Validate by creating a spotapi client (this validates the cookie).
-        try:
-            client = await AsyncClient.from_cookies(cookie)
-            await client.close()
-        except Exception as error:
-            decky.logger.warning(f"Spotify cookie validation failed: {error}")
-            return web.Response(
-                text="Invalid Spotify cookie. Please check and try again.",
-                status=400,
-                content_type="text/html",
-            )
+    async def logout_spotify(self) -> dict:
+        await self.cancel_spotify_browser_login()
+        self._browser_login_status = {"status": "idle"}
+        self._spotify_session_cookie = None
+        await self._reset_spotify_client()
+        await self._reset_player()
+        return {"ok": True}
 
-        # Save the cookie persistently.
-        settings = self._load_settings()
-        settings[SPOTIFY_COOKIE_SETTING_KEY] = cookie
-        self._save_settings(settings)
-
-        # Notify the frontend that auth succeeded.
-        try:
-            decky.emit("spotify_auth_success", True)
-        except Exception:
-            pass
-
-        # Stop the auth server after a short delay so the response can be sent.
-        asyncio.create_task(self._stop_after_delay())
-
-        html = """<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Signed In</title>
-<style>
-    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #121212; color: #fff; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; margin: 0; padding: 20px; box-sizing: border-box; }
-    h1 { color: #1ed760; font-size: 28px; margin-bottom: 8px; }
-    p { color: #a9a9a9; font-size: 16px; text-align: center; max-width: 400px; }
-</style>
-</head>
-<body>
-<h1 style="color:#1ed760;">Signed In!</h1>
-<p>You can close this page and return to the Deck.</p>
-</body>
-</html>"""
-        return web.Response(text=html, content_type="text/html")
-
-    async def _stop_after_delay(self) -> None:
-        """Stop the auth server after a short delay so the response can be sent."""
-        await asyncio.sleep(1)
-        await self.stop_qr_auth()
-
-    # --- End of Spotify API (spotapi) QR authentication --------------------
+    async def _unload(self) -> None:
+        """Close an in-progress isolated sign-in when Decky unloads the plugin."""
+        task = getattr(self, "_warm_task", None)
+        if task is not None:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        await self.cancel_spotify_browser_login()
+        self._spotify_session_cookie = None
+        await self._reset_spotify_client()
+        await self._reset_player()
 
     # --- soloist download -------------------------------------------------
 
@@ -388,11 +410,14 @@ document.getElementById('form').addEventListener('submit', async (e) => {
         return {"ok": True}
 
     async def _download_soloist(self) -> None:
-        root = _soloist_root()
-        os.makedirs(root, exist_ok=True)
-        progress = self._download_progress
+        # Keep network reads and archive extraction off Decky's event loop so
+        # get_download_status can report progress while this work is running.
+        await asyncio.to_thread(self._download_soloist_sync, self._download_progress)
 
+    def _download_soloist_sync(self, progress: dict) -> None:
         try:
+            root = _soloist_root()
+            os.makedirs(root, exist_ok=True)
             with tempfile.TemporaryDirectory(prefix="solodeck-soloist-") as tmpdir:
                 tarball = os.path.join(tmpdir, "soloist.tar.gz")
 
@@ -401,7 +426,10 @@ document.getElementById('form').addEventListener('submit', async (e) => {
                 decky.logger.info(f"Downloading soloist from {SOLOIST_RELEASE_URL}")
                 with urllib.request.urlopen(SOLOIST_RELEASE_URL, timeout=30) as resp:
                     total = resp.headers.get("content-length")
-                    progress["total"] = int(total) if total else 0
+                    try:
+                        progress["total"] = max(0, int(total)) if total else 0
+                    except ValueError:
+                        progress["total"] = 0
                     with open(tarball, "wb") as out:
                         while True:
                             chunk = resp.read(65536)
@@ -410,9 +438,9 @@ document.getElementById('form').addEventListener('submit', async (e) => {
                             out.write(chunk)
                             progress["downloaded"] += len(chunk)
                             if progress["total"]:
-                                progress["percent"] = int(
+                                progress["percent"] = min(100, int(
                                     progress["downloaded"] * 100 / progress["total"]
-                                )
+                                ))
 
                 # Extract.
                 progress["status"] = DL_EXTRACTING
