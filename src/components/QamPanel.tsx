@@ -32,9 +32,9 @@ import { updatePlaybackSnapshot } from "./playbackSnapshot";
 import SpotifyLibraryModal, { TrackContextMenu } from "./SpotifyLibraryModal";
 
 const SOLOIST_WS_URL = "ws://127.0.0.1:35797";
-// Background refresh: poll soloist's playback/queue state every 20 seconds
+// Background refresh: poll soloist's playback/queue state every 10 seconds
 // independent of user interaction so the QAM stays in sync while idle.
-const STATE_REFRESH_INTERVAL_MS = 20_000;
+const STATE_REFRESH_INTERVAL_MS = 10_000;
 const ACTION_SETTLE_TIMEOUT_MS = 1500;
 const METADATA_CACHE_MAX_ENTRIES = 500;
 const METADATA_CACHE_TTL_MS = 30 * 60_000;
