@@ -68,6 +68,11 @@ DAEMON_RESTART_DELAY = 3.0
 DAEMON_MIN_UPTIME = 10.0
 SOLOIST_WS_PORT = 35797
 
+# After soloist exits with code 0 from --pair, it may need a moment to flush
+# the session to disk before _is_paired() reports true. Poll briefly.
+PAIRED_POLL_INTERVAL = 0.5
+PAIRED_POLL_TIMEOUT = 5.0
+
 
 def _soloist_root() -> str:
     # Persistent runtime data dir, outside the plugin folder so a downloaded
@@ -551,6 +556,25 @@ class Plugin(SpotAPIAdapterMixin, SpotAPIPlaybackMixin):
 
     # --- soloist daemon ----------------------------------------------------
 
+    async def get_daemon_status(self) -> dict:
+        proc = self._daemon_proc
+        pid = proc.pid if proc is not None else None
+        uptime = None
+        if self._daemon_started_at is not None:
+            uptime = time.time() - self._daemon_started_at
+        settings = self._load_settings()
+        return {
+            "running": self._daemon_active(),
+            "enabled": settings.get("daemon_enabled", True),
+            "paired": self._is_paired(),
+            "pid": pid,
+            "exit_code": self._daemon_exit_code,
+            "error": self._daemon_error,
+            "output": list(self._daemon_output),
+            "restarts": self._daemon_restarts,
+            "uptime": uptime,
+        }
+
     async def start_daemon(self) -> dict:
         status = await self.get_soloist_status()
         if not status["installed"]:
@@ -607,6 +631,17 @@ class Plugin(SpotAPIAdapterMixin, SpotAPIPlaybackMixin):
             return any(os.scandir(users))
         except OSError:
             return False
+
+    async def _wait_for_paired(self) -> bool:
+        # soloist may need a moment to flush the session to disk after it
+        # exits from --pair. Poll _is_paired() briefly instead of failing
+        # on the first check.
+        deadline = time.monotonic() + PAIRED_POLL_TIMEOUT
+        while time.monotonic() < deadline:
+            if self._is_paired():
+                return True
+            await asyncio.sleep(PAIRED_POLL_INTERVAL)
+        return self._is_paired()
 
     def _load_settings(self) -> dict:
         settings = {
@@ -687,8 +722,19 @@ class Plugin(SpotAPIAdapterMixin, SpotAPIPlaybackMixin):
             elif self._pairing_exit_code == 0:
                 decky.logger.info("Spotify pairing finished successfully")
                 # The device is paired now, so keep it available in Spotify.
+                # Give soloist a moment to flush the session to disk before
+                # starting the daemon (which gates on _is_paired()).
                 self._set_daemon_enabled(True)
-                await self.start_daemon()
+                if not await self._wait_for_paired():
+                    decky.logger.warning(
+                        "Pairing exited cleanly but soloist did not register "
+                        "as paired within timeout"
+                    )
+                result = await self.start_daemon()
+                if not result["ok"]:
+                    decky.logger.warning(
+                        f"Could not start daemon after pairing: {result.get('error')}"
+                    )
             else:
                 decky.logger.warning(f"Spotify pairing exited with {self._pairing_exit_code}")
         except asyncio.CancelledError:
