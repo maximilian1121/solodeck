@@ -4,7 +4,7 @@ Version=1.0
 Name=Solodeck Install / Update
 Comment=Install or update the Solodeck Spotify Connect Decky plugin (downloads latest from GitHub)
 Exec=bash -c 'command -v python3 >/dev/null 2>&1 || { echo "python3 is required but not installed"; read -r; exit 1; }; f="$(mktemp)"; curl -fsSL -o "$f" "https://raw.githubusercontent.com/maximilian1121/solodeck/main/install_solodeck.py" && python3 "$f"; rc=$?; rm -f "$f"; exit $rc'
-Icon=spotify-client
+Icon=steamdeck-gaming-return
 Terminal=true
 Categories=System;Settings;
 StartupNotify=true
