@@ -122,3 +122,23 @@ python3 deploy.py --no-build # install the newest existing zip
 It installs into the Decky Loader on this machine (`~/homebrew`) using Decky's
 own install API (no sudo required), then uses Steam's local CEF debug port to
 reload the frontend.
+
+## One-click install / update from Desktop Mode
+
+A `.desktop` shortcut is included so you can build and install (or update)
+the plugin by clicking an icon in Steam's application launcher:
+
+1. Copy the shortcut into your applications menu:
+   ```bash
+   cp solodeck-install.desktop ~/.local/share/applications/
+   ```
+2. Open the **Application Launcher** in Desktop Mode, search for
+   **"Solodeck Install / Update"**, and click it.
+3. A terminal opens, builds the plugin, pushes it into Decky Loader
+   (`~/homebrew/plugins/solodeck`), and reloads the frontend so the new
+   Quick Access Menu tab appears. On failure it shows an error and waits for
+   Enter before closing.
+
+To update after making changes, just click the shortcut again — it rebuilds
+from the current code and reinstalls over the previous version.
+

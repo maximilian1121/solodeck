@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Solodeck Install / Update
+Comment=Build and install the Solodeck Spotify Connect Decky plugin
+Exec=/home/max/Documents/programming/solodeck/install_solodeck.sh
+Icon=spotify-client
+Terminal=true
+Categories=System;Settings;
+Path=/home/max/Documents/programming/solodeck
+StartupNotify=true
