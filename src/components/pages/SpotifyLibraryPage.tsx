@@ -10,6 +10,8 @@ import {
 } from "react";
 import {
     FaCompactDisc,
+    FaChevronLeft,
+    FaChevronRight,
     FaHome,
     FaMusic,
     FaPlay,
@@ -96,6 +98,7 @@ export default function SpotifyLibraryPage({
     const [libraryError, setLibraryError] = useState("");
     const [libraryRetry, setLibraryRetry] = useState(0);
     const [page, setPage] = useState<"home" | "search" | "browse">("home");
+    const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
     const [collectionHeaderCollapsed, setCollectionHeaderCollapsed] =
         useState(false);
     const [searchText, setSearchText] = useState("");
@@ -1026,8 +1029,11 @@ export default function SpotifyLibraryPage({
                     minHeight: 0,
                     minWidth: 0,
                     display: "grid",
-                    gridTemplateColumns: "minmax(140px, 20%) minmax(0, 1fr)",
-                    gap: "8px",
+                    gridTemplateColumns: sidebarCollapsed
+                        ? "0px minmax(0, 1fr)"
+                        : "minmax(140px, 20%) minmax(0, 1fr)",
+                    gap: sidebarCollapsed ? "0" : "8px",
+                    position: "relative",
                 }}
             >
                 <Focusable
@@ -1037,14 +1043,52 @@ export default function SpotifyLibraryPage({
                         flexDirection: "column",
                         minHeight: 0,
                         minWidth: 0,
-                        paddingRight: "8px",
-                        borderRight: "1px solid var(--gpSystem-Separator)",
+                        paddingRight: sidebarCollapsed ? "0" : "8px",
+                        borderRight: sidebarCollapsed ? "none" : "1px solid var(--gpSystem-Separator)",
+                        ...(sidebarCollapsed ? { position: "absolute", left: 0, top: 0, zIndex: 20, overflow: "visible" } : {}),
                     }}
                 >
+                    {sidebarCollapsed ? (
+                        <Focusable
+                            aria-label="Expand library sidebar"
+                            title="Expand library sidebar"
+                            onActivate={() => setSidebarCollapsed(false)}
+                            style={{
+                                alignSelf: "center",
+                                flex: "0 0 36px",
+                                width: "36px",
+                                height: "36px",
+                                display: "flex",
+                                alignItems: "center",
+                                justifyContent: "center",
+                                borderRadius: "6px",
+                            }}
+                        >
+                            <FaChevronRight aria-hidden="true" />
+                        </Focusable>
+                    ) : (
+                    <>
+                    <div style={{ display: "flex", alignItems: "center", gap: "6px", flex: "0 0 30px", height: "30px" }}>
+                        <Focusable
+                            aria-label="Collapse library sidebar"
+                            title="Collapse library sidebar"
+                            onActivate={() => setSidebarCollapsed(true)}
+                            style={{
+                                width: "28px",
+                                height: "28px",
+                                flex: "0 0 28px",
+                                display: "flex",
+                                alignItems: "center",
+                                justifyContent: "center",
+                                borderRadius: "6px",
+                            }}
+                        >
+                            <FaChevronLeft aria-hidden="true" />
+                        </Focusable>
                     <div
                         aria-live="polite"
                         style={{
-                            flex: "0 0 18px",
+                            flex: "1 1 auto",
                             height: "18px",
                             overflow: "hidden",
                             color: "var(--gpColor-Grey)",
@@ -1059,6 +1103,7 @@ export default function SpotifyLibraryPage({
                         }}
                     >
                         Updating library...
+                    </div>
                     </div>
                     <div
                         ref={libraryScrollRef}
@@ -1199,10 +1244,13 @@ export default function SpotifyLibraryPage({
                                 </div>
                             )}
                     </div>
+                    </>
+                    )}
                 </Focusable>
                 <Focusable
                     flow-children="vertical"
                     style={{
+                        gridColumn: sidebarCollapsed ? "2" : undefined,
                         display: "flex",
                         flexDirection: "column",
                         minHeight: 0,

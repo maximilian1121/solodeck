@@ -271,7 +271,6 @@ export default function QamPanel() {
             seekingRef.current = false;
         }, 350);
     };
-
     const handleVolumeChange = (nextVolume: number) => {
         const clampedVolume = Math.max(
             0,
@@ -493,6 +492,7 @@ export default function QamPanel() {
                             currentTrackAlbumUri: null,
                             contextUri: null,
                             currentTrack: null,
+                            upcomingTracks: [],
                         });
                         updatePlaybackProgress({ positionMs: 0, durationMs: 0, isPlaying: false, timestampMs: Date.now() });
                     } else if (data.type === "playback_state") {
@@ -704,6 +704,11 @@ export default function QamPanel() {
                                 entry.item.uri !== promotingUriRef.current,
                         );
                         setUpcoming(visibleQueue);
+                        updatePlaybackSnapshot({
+                            upcomingTracks: visibleQueue
+                                .slice(0, 2)
+                                .map((entry) => entry.item),
+                        });
                         queue.forEach((entry) =>
                             requestTrackMetadata(entry.item),
                         );

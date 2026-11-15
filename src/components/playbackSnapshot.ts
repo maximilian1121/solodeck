@@ -5,6 +5,7 @@ export type PlaybackSnapshot = {
     currentTrackAlbumUri: string | null;
     contextUri: string | null;
     currentTrack: TrackItem | null;
+    upcomingTracks: TrackItem[];
 };
 
 export type PlaybackProgressSnapshot = {
@@ -19,6 +20,7 @@ let playbackSnapshot: PlaybackSnapshot = {
     currentTrackAlbumUri: null,
     contextUri: null,
     currentTrack: null,
+    upcomingTracks: [],
 };
 
 let playbackProgressSnapshot: PlaybackProgressSnapshot = {
@@ -30,7 +32,6 @@ let playbackProgressSnapshot: PlaybackProgressSnapshot = {
 
 const playbackSnapshotListeners = new Set<() => void>();
 const playbackProgressListeners = new Set<() => void>();
-
 export function subscribePlaybackProgress(listener: () => void) {
     playbackProgressListeners.add(listener);
     return () => playbackProgressListeners.delete(listener);
@@ -62,7 +63,8 @@ export function updatePlaybackSnapshot(update: Partial<PlaybackSnapshot>) {
         next.currentTrackUri === playbackSnapshot.currentTrackUri &&
         next.currentTrackAlbumUri === playbackSnapshot.currentTrackAlbumUri &&
         next.contextUri === playbackSnapshot.contextUri &&
-        next.currentTrack === playbackSnapshot.currentTrack
+        next.currentTrack === playbackSnapshot.currentTrack &&
+        next.upcomingTracks === playbackSnapshot.upcomingTracks
     ) {
         return;
     }

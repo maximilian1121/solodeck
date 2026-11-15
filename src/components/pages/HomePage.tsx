@@ -1,27 +1,13 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { getSpotifyLyrics, getTrackMetadata, type SpotifyLyrics } from "../../api";
+import overlayImage from "../../overlay.png";
+import { getTrackMetadata, type SpotifyLyrics } from "../../api";
 import {
     getPlaybackProgressSnapshot,
     getPlaybackSnapshot,
     subscribePlaybackProgress,
     subscribePlaybackSnapshot,
 } from "../playbackSnapshot";
-
-function coverQuality(cover: { size?: string; width?: number; height?: number }) {
-    if (cover.width && cover.height) return cover.width * cover.height;
-    const size = (cover.size ?? "").toLowerCase();
-    const namedSize: Record<string, number> = {
-        small: 64,
-        default: 300,
-        large: 640,
-        xlarge: 1280,
-    };
-    if (namedSize[size]) return namedSize[size] ** 2;
-    const dimensions = size.match(/(\d{2,5})\s*[x×]\s*(\d{2,5})/);
-    if (dimensions) return Number(dimensions[1]) * Number(dimensions[2]);
-    const numericSize = Number(size.replace(/[^\d]/g, ""));
-    return Number.isFinite(numericSize) && numericSize > 0 ? numericSize ** 2 : 0;
-}
+import { coverQuality, getTrackPalette, largestCoverUrl, loadTrackLyrics, precacheTrack } from "./homePrecache";
 
 export default function HomePage() {
     const playback = useSyncExternalStore(
@@ -38,9 +24,14 @@ export default function HomePage() {
     const [loading, setLoading] = useState(false);
     const [positionMs, setPositionMs] = useState(progress.positionMs);
     const [coverColors, setCoverColors] = useState<[string, string]>(["#14251f", "#28203c"]);
+    const [previousCoverColors, setPreviousCoverColors] = useState<[string, string] | null>(null);
+    const [coverGradientVisible, setCoverGradientVisible] = useState(true);
     const [coverUpgrade, setCoverUpgrade] = useState<{ uri: string; url: string } | null>(null);
     const lyricsContainerRef = useRef<HTMLElement>(null);
     const activeLineRef = useRef<HTMLDivElement>(null);
+    const coverColorsRef = useRef(coverColors);
+    const coverFadeFrameRef = useRef<number | null>(null);
+    const coverFadeTimerRef = useRef<number | null>(null);
     const uri = playback.currentTrackUri;
     const track = playback.currentTrack;
     const title = track?.decorations?.identity?.name ?? track?.name ?? "";
@@ -48,12 +39,7 @@ export default function HomePage() {
         .map((creator) => creator.entity?.decorations?.identity?.name?.trim())
         .filter((name): name is string => Boolean(name));
     const covers = track?.decorations?.visual_identity?.cover ?? [];
-    const selectedCover = covers.length
-        ? covers
-              .map((cover, index) => ({ cover, index, quality: coverQuality(cover) }))
-              .sort((a, b) => a.quality - b.quality || a.index - b.index)
-              .at(-1)?.cover.url
-        : undefined;
+    const selectedCover = largestCoverUrl(track);
     const coverUrl = uri && coverUpgrade?.uri === uri ? coverUpgrade.url : selectedCover;
 
     useEffect(() => {
@@ -66,7 +52,7 @@ export default function HomePage() {
         // Enrich just the artwork in the background; track details render at once.
         getTrackMetadata(uri)
             .then((item) => {
-                const bestCover = item?.decorations?.visual_identity?.cover?.[0]?.url;
+                const bestCover = largestCoverUrl(item);
                 if (active && bestCover) setCoverUpgrade({ uri, url: bestCover });
             })
             .catch((error: unknown) => {
@@ -76,64 +62,8 @@ export default function HomePage() {
     }, [uri, selectedCover]);
 
     useEffect(() => {
-        if (!coverUrl) return;
-        setCoverColors(["#14251f", "#28203c"]);
-        const image = new Image();
-        image.crossOrigin = "anonymous";
-        image.onload = () => {
-            try {
-                const canvas = document.createElement("canvas");
-                canvas.width = 24;
-                canvas.height = 24;
-                const context = canvas.getContext("2d", { willReadFrequently: true });
-                if (!context) return;
-                context.drawImage(image, 0, 0, 24, 24);
-                const pixels = context.getImageData(0, 0, 24, 24).data;
-                const buckets = new Map<string, { count: number; r: number; g: number; b: number; saturation: number }>();
-                for (let i = 0; i < pixels.length; i += 4) {
-                    const r = pixels[i], g = pixels[i + 1], b = pixels[i + 2], a = pixels[i + 3];
-                    if (a < 180) continue;
-                    const max = Math.max(r, g, b), min = Math.min(r, g, b);
-                    const key = `${r >> 4}-${g >> 4}-${b >> 4}`;
-                    const current = buckets.get(key) ?? { count: 0, r: 0, g: 0, b: 0, saturation: 0 };
-                    current.count += 1;
-                    current.r += r; current.g += g; current.b += b;
-                    current.saturation += max ? (max - min) / max : 0;
-                    buckets.set(key, current);
-                }
-                const prominence = (color: (typeof buckets extends Map<string, infer T> ? T : never)) =>
-                    color.count * (0.55 + color.saturation / Math.max(1, color.count));
-                const candidates = [...buckets.values()].sort((a, b) => prominence(b) - prominence(a));
-                const darkColor = (color: (typeof candidates)[number]) => {
-                    const factor = Math.min(0.58, 52 / Math.max(1, 0.2126 * color.r / color.count + 0.7152 * color.g / color.count + 0.0722 * color.b / color.count));
-                    return `#${[color.r, color.g, color.b].map((channel) => Math.round(channel / color.count * factor).toString(16).padStart(2, "0")).join("")}`;
-                };
-                if (candidates.length) {
-                    const first = candidates[0];
-                    const average = (color: (typeof candidates)[number]) => [
-                        color.r / color.count,
-                        color.g / color.count,
-                        color.b / color.count,
-                    ];
-                    const firstRgb = average(first);
-                    const second = candidates.find((candidate) => {
-                        if (candidate === first) return false;
-                        const rgb = average(candidate);
-                        const distance = Math.hypot(
-                            firstRgb[0] - rgb[0],
-                            firstRgb[1] - rgb[1],
-                            firstRgb[2] - rgb[2],
-                        );
-                        return distance >= 72;
-                    }) ?? candidates[1] ?? first;
-                    setCoverColors([darkColor(first), darkColor(second)]);
-                }
-            } catch {
-                // If the CDN doesn't permit canvas sampling, keep the legible fallback colors.
-            }
-        };
-        image.src = coverUrl;
-    }, [coverUrl]);
+        playback.upcomingTracks.slice(0, 2).forEach(precacheTrack);
+    }, [playback.upcomingTracks]);
 
     useEffect(() => {
         const elapsed = progress.isPlaying
@@ -156,19 +86,43 @@ export default function HomePage() {
         }
         setLyrics(null);
         setLoading(true);
-        getSpotifyLyrics(uri)
+        loadTrackLyrics(uri)
             .then((result) => {
-                if (active) setLyrics(result.ok ? result : null);
-            })
-            .catch((error: unknown) => {
-                console.warn("solodeck: could not load track lyrics", error);
-                if (active) setLyrics(null);
+                if (active) setLyrics(result);
             })
             .finally(() => {
                 if (active) setLoading(false);
             });
         return () => { active = false; };
     }, [uri]);
+
+    useEffect(() => {
+        if (!uri || !coverUrl) return;
+        let active = true;
+        getTrackPalette(uri, coverUrl).then((palette) => {
+            if (!active || palette[0] === coverColorsRef.current[0] && palette[1] === coverColorsRef.current[1]) return;
+            if (coverFadeFrameRef.current !== null) window.cancelAnimationFrame(coverFadeFrameRef.current);
+            if (coverFadeTimerRef.current !== null) window.clearTimeout(coverFadeTimerRef.current);
+            setPreviousCoverColors(coverColorsRef.current);
+            coverColorsRef.current = palette;
+            setCoverColors(palette);
+            setCoverGradientVisible(false);
+            coverFadeFrameRef.current = window.requestAnimationFrame(() => {
+                coverFadeFrameRef.current = null;
+                setCoverGradientVisible(true);
+            });
+            coverFadeTimerRef.current = window.setTimeout(() => {
+                coverFadeTimerRef.current = null;
+                setPreviousCoverColors(null);
+            }, 750);
+        });
+        return () => { active = false; };
+    }, [uri, coverUrl]);
+
+    useEffect(() => () => {
+        if (coverFadeFrameRef.current !== null) window.cancelAnimationFrame(coverFadeFrameRef.current);
+        if (coverFadeTimerRef.current !== null) window.clearTimeout(coverFadeTimerRef.current);
+    }, []);
 
     const activeIndex = useMemo(() => {
         const lines = lyrics?.lines ?? [];
@@ -212,39 +166,70 @@ export default function HomePage() {
                 <h1 style={{ margin: 0, fontSize: "36px", lineHeight: 1.1, fontWeight: 700 }}>solodeck</h1>
             </header>
             <div style={{ display: "flex", flex: "1 1 auto", minHeight: 0, minWidth: 0, gap: "24px" }}>
-            <section aria-label="Now playing" style={{ width: "34%", minWidth: "180px", maxWidth: "340px", flex: "0 1 34%", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", textAlign: "center", gap: "14px", padding: "8px" }}>
-                <div style={{ width: "100%", aspectRatio: "1", maxHeight: "min(42vh, 340px)", borderRadius: "10px", overflow: "hidden", background: "rgba(255,255,255,0.08)", boxShadow: "0 10px 32px rgba(0,0,0,0.35)" }}>
-                    {coverUrl ? <img src={coverUrl} alt="" decoding="async" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : null}
+            <section aria-label="Now playing" style={{ boxSizing: "border-box", width: "34%", minWidth: "180px", maxWidth: "340px", flex: "0 1 34%", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", textAlign: "center", gap: "14px", padding: 0 }}>
+                <div style={{ width: "100%", aspectRatio: "1", maxHeight: "min(42vh, 340px)", borderRadius: "10px", overflow: "hidden", position: "relative", background: "rgba(255,255,255,0.08)", boxShadow: "0 10px 32px rgba(0,0,0,0.35)" }}>
+                    {coverUrl && (
+                        <>
+                            <img src={coverUrl} alt="" decoding="async" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover" }} />
+                            <img src={overlayImage} alt="" aria-hidden="true" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover", mixBlendMode: "multiply", pointerEvents: "none" }} />
+                        </>
+                    )}
                 </div>
                 <div style={{ width: "100%", minWidth: 0 }}>
                     <div style={{ fontSize: "22px", lineHeight: 1.2, fontWeight: 700, overflowWrap: "anywhere" }}>{title || (uri ? "Loading track…" : "Nothing is playing")}</div>
                     {artists.length > 0 && <div style={{ paddingTop: "7px", color: "var(--gpColor-Grey)", fontSize: "16px", lineHeight: 1.35, overflowWrap: "anywhere" }}>{artists.join(", ")}</div>}
                 </div>
             </section>
-            <section
-                ref={lyricsContainerRef}
-                aria-label="Lyrics"
-                aria-live="polite"
-                onWheel={(event) => event.preventDefault()}
-                onTouchMove={(event) => event.preventDefault()}
+            <div
                 style={{
                     flex: "1 1 auto",
                     minWidth: 0,
                     minHeight: 0,
-                    overflowY: "hidden",
-                    overscrollBehavior: "none",
-                    touchAction: "none",
-                    display: "flex",
-                    flexDirection: "column",
-                    justifyContent: visibleLines.length ? "flex-start" : "center",
-                    gap: "16px",
-                    padding: "22px 24px",
+                    position: "relative",
+                    overflow: "hidden",
                     borderRadius: "14px",
-                    background: `linear-gradient(135deg, ${coverColors[0]} 0%, ${coverColors[1]} 100%)`,
+                    isolation: "isolate",
+                    background: `linear-gradient(135deg, ${(previousCoverColors ?? coverColors)[0]} 0%, ${(previousCoverColors ?? coverColors)[1]} 100%)`,
                     boxShadow: "inset 0 1px rgba(255,255,255,0.12), 0 12px 36px rgba(0,0,0,0.28)",
-                    maskImage: visibleLines.length ? "linear-gradient(transparent, black 9%, black 91%, transparent)" : undefined,
                 }}
             >
+                <div
+                    aria-hidden="true"
+                    style={{
+                        position: "absolute",
+                        inset: 0,
+                        zIndex: 0,
+                        pointerEvents: "none",
+                        borderRadius: "inherit",
+                        background: `linear-gradient(135deg, ${coverColors[0]} 0%, ${coverColors[1]} 100%)`,
+                        opacity: coverGradientVisible ? 1 : 0,
+                        transition: "opacity 700ms linear",
+                    }}
+                />
+                <section
+                    ref={lyricsContainerRef}
+                    aria-label="Lyrics"
+                    aria-live="polite"
+                    onWheel={(event) => event.preventDefault()}
+                    onTouchMove={(event) => event.preventDefault()}
+                    style={{
+                        position: "absolute",
+                        inset: 0,
+                        boxSizing: "border-box",
+                        overflowY: "hidden",
+                        overscrollBehavior: "none",
+                        touchAction: "none",
+                        display: "flex",
+                        flexDirection: "column",
+                        justifyContent: visibleLines.length ? "flex-start" : "center",
+                        gap: "16px",
+                        padding: "22px 24px",
+                        borderRadius: "inherit",
+                        background: "transparent",
+                        maskImage: visibleLines.length ? "linear-gradient(transparent, black 9%, black 91%, transparent)" : undefined,
+                    }}
+                >
+                <div style={{ position: "relative", zIndex: 1, display: "flex", flex: "1 1 auto", minHeight: 0, flexDirection: "column", justifyContent: visibleLines.length ? "flex-start" : "center", gap: "16px" }}>
                 {loading ? (
                     <p style={{ color: "var(--gpColor-Grey)", fontSize: "20px", textAlign: "center" }}>Loading lyrics…</p>
                 ) : visibleLines.length ? (
@@ -280,7 +265,9 @@ export default function HomePage() {
                         {uri ? "Lyrics aren’t available for this track." : "Play a track to see its lyrics."}
                     </p>
                 )}
+                </div>
             </section>
+            </div>
             </div>
         </main>
     );
