@@ -851,18 +851,21 @@ export default function QamPanel() {
                                 ? data.is_active
                                 : null,
                         );
+                        // Always refresh playback state on (re)connect so
+                        // opening the QAM page shows the current soloist
+                        // state right away, not just on the next timer tick.
+                        socket?.send(
+                            JSON.stringify({
+                                type: "command",
+                                command: "get_state",
+                            }),
+                        );
                         if (!requestedQueue) {
                             socket?.send(
                                 JSON.stringify({
                                     type: "command",
                                     command: "get_queue",
                                     limit: 10,
-                                }),
-                            );
-                            socket?.send(
-                                JSON.stringify({
-                                    type: "command",
-                                    command: "get_state",
                                 }),
                             );
                             requestedQueue = true;
@@ -1210,6 +1213,28 @@ export default function QamPanel() {
             socket?.close();
         };
     }, []);
+
+    // Refresh state whenever the QAM page is opened / the window becomes
+    // visible, even if the panel itself stayed mounted in the background.
+    useEffect(() => {
+        const onVisibilityChange = () => {
+            if (
+                !document.hidden &&
+                isLoggedIn &&
+                socketRef.current?.readyState === WebSocket.OPEN
+            ) {
+                socketRef.current.send(
+                    JSON.stringify({ type: "command", command: "get_state" }),
+                );
+            }
+        };
+        window.addEventListener("visibilitychange", onVisibilityChange);
+        return () =>
+            window.removeEventListener(
+                "visibilitychange",
+                onVisibilityChange,
+            );
+    }, [isLoggedIn]);
 
     return (
         <>
