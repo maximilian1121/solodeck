@@ -4,6 +4,17 @@ A [Decky Loader](https://decky.xyz/) plugin that runs [Spotify Soloist](https://
 
 The plugin appears as its own icon in the Steam Quick Access Menu tab strip (next to Steam's tabs and Decky's own), so it is one button away without going through Decky's plugin list. The Quick Access page itself is intentionally just a title; configuration lives in the plugin's page in Decky.
 
+## Install or update on Steam Deck
+
+Download the [solodeck-install.desktop shortcut](https://raw.githubusercontent.com/maximilian1121/solodeck/main/solodeck-install.desktop) directly, then place it on your desktop and allow it to run as a program (right-click → **Properties** → **Permissions** → **Allow executing file as program**). Double-click the shortcut to download the latest pre-built plugin from GitHub Releases, install it into Decky Loader, and reload the frontend. You can run the same shortcut again to update. Nothing is built on your Steam Deck.
+
+If double-clicking does not run it, open Konsole in the folder where you downloaded the file and run:
+
+```bash
+chmod +x solodeck-install.desktop
+./solodeck-install.desktop
+```
+
 ## Spotify Soloist (downloaded at runtime)
 
 **soloist is NOT bundled with this plugin.** Spotify does not allow redistributing the soloist binary, so the plugin downloads it on demand from Spotify's official builds:
@@ -122,18 +133,3 @@ python3 deploy.py --no-build # install the newest existing zip
 It installs into the Decky Loader on this machine (`~/homebrew`) using Decky's
 own install API (no sudo required), then uses Steam's local CEF debug port to
 reload the frontend.
-
-## One-click install / update from Desktop Mode
-
-A single `.desktop` shortcut is included. Download it, make it executable, run it — that's it:
-
-1. Download **solodeck-install.desktop** from this repository (e.g. open it on GitHub and click Download, or grab the raw file).
-2. Drag it onto your desktop (or copy to `~/.local/share/applications/`).
-3. Make it executable: right-click → Properties → Permissions → "Allow executing file as program", or run:
-   ```bash
-   chmod +x solodeck-install.desktop
-   ```
-4. Double-click it. A terminal opens, downloads the latest pre-built plugin zip from GitHub Releases, installs it into Decky Loader (`~/homebrew/plugins/solodeck`) using Decky's own API, and reloads the frontend so the new Quick Access Menu tab appears. On failure it shows the error and waits for Enter before closing. Nothing is built on your machine — just the pre-built zip is downloaded and deployed.
-
-To update to a later version, just run the same shortcut again — it fetches the latest release and reinstalls over the previous version.
-

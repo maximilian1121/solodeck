@@ -16,13 +16,151 @@ Usage:
 import asyncio
 import json
 import os
+import base64
+import hashlib
+import struct
 import sys
 import tempfile
 import time
 import urllib.request
 import zipfile
+from urllib.parse import urlsplit
 
-import websockets
+
+class _LocalWebSocket:
+    """Small asyncio WebSocket client using only Python's standard library."""
+
+    def __init__(self, url, max_size=50_000_000):
+        self.url = urlsplit(url)
+        self.max_size = max_size
+        self.reader = None
+        self.writer = None
+        self._fragments = []
+
+    async def __aenter__(self):
+        if self.url.scheme != "ws" or not self.url.hostname:
+            raise ValueError("Decky and Steam must expose a local ws:// endpoint")
+        port = self.url.port or 80
+        self.reader, self.writer = await asyncio.open_connection(self.url.hostname, port)
+        key = base64.b64encode(os.urandom(16)).decode("ascii")
+        path = self.url.path or "/"
+        if self.url.query:
+            path += "?" + self.url.query
+        request = (
+            f"GET {path} HTTP/1.1\r\n"
+            f"Host: {self.url.netloc}\r\n"
+            "Upgrade: websocket\r\n"
+            "Connection: Upgrade\r\n"
+            f"Sec-WebSocket-Key: {key}\r\n"
+            "Sec-WebSocket-Version: 13\r\n\r\n"
+        )
+        self.writer.write(request.encode("ascii"))
+        await self.writer.drain()
+        response = await self.reader.readuntil(b"\r\n\r\n")
+        lines = response.decode("latin-1").split("\r\n")
+        if len(lines[0].split()) < 2 or lines[0].split()[1] != "101":
+            raise ConnectionError(f"WebSocket handshake failed: {lines[0]}")
+        headers = {}
+        for line in lines[1:]:
+            if ":" in line:
+                name, value = line.split(":", 1)
+                headers[name.strip().lower()] = value.strip()
+        accept = base64.b64encode(
+            hashlib.sha1((key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode("ascii")).digest()
+        ).decode("ascii")
+        if headers.get("sec-websocket-accept") != accept:
+            raise ConnectionError("WebSocket server returned an invalid accept key")
+        return self
+
+    async def __aexit__(self, *_exc):
+        if self.writer is not None:
+            try:
+                await self._send_frame(8, b"")
+            except (ConnectionError, OSError):
+                pass
+            self.writer.close()
+            try:
+                await self.writer.wait_closed()
+            except OSError:
+                pass
+
+    async def _send_frame(self, opcode, payload):
+        if self.writer is None:
+            raise ConnectionError("WebSocket is closed")
+        mask = os.urandom(4)
+        length = len(payload)
+        head = bytearray([0x80 | opcode])
+        if length < 126:
+            head.append(0x80 | length)
+        elif length <= 0xFFFF:
+            head.append(0x80 | 126)
+            head.extend(struct.pack("!H", length))
+        else:
+            head.append(0x80 | 127)
+            head.extend(struct.pack("!Q", length))
+        masked = bytes(value ^ mask[index % 4] for index, value in enumerate(payload))
+        self.writer.write(bytes(head) + mask + masked)
+        await self.writer.drain()
+
+    async def send(self, message):
+        if isinstance(message, str):
+            payload = message.encode("utf-8")
+        else:
+            payload = bytes(message)
+        await self._send_frame(1, payload)
+
+    async def recv(self):
+        while True:
+            first, second = await self.reader.readexactly(2)
+            fin, opcode = bool(first & 0x80), first & 0x0F
+            masked, length = bool(second & 0x80), second & 0x7F
+            if length == 126:
+                length = struct.unpack("!H", await self.reader.readexactly(2))[0]
+            elif length == 127:
+                length = struct.unpack("!Q", await self.reader.readexactly(8))[0]
+            if length > self.max_size:
+                raise ValueError("WebSocket message exceeds the installer limit")
+            mask = await self.reader.readexactly(4) if masked else None
+            payload = await self.reader.readexactly(length)
+            if mask:
+                payload = bytes(value ^ mask[index % 4] for index, value in enumerate(payload))
+            if opcode == 8:
+                raise ConnectionError("WebSocket connection closed")
+            if opcode == 9:
+                await self._send_frame(10, payload)
+                continue
+            if opcode == 10:
+                continue
+            if opcode in (1, 2):
+                self._fragments = [payload]
+                self._fragment_opcode = opcode
+            elif opcode == 0 and self._fragments:
+                self._fragments.append(payload)
+            else:
+                continue
+            if fin:
+                result = b"".join(self._fragments)
+                opcode = self._fragment_opcode
+                self._fragments = []
+                return result.decode("utf-8") if opcode == 1 else result
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        try:
+            return await self.recv()
+        except (ConnectionError, asyncio.IncompleteReadError):
+            raise StopAsyncIteration
+
+
+class _WebSocketsCompat:
+    @staticmethod
+    def connect(url, max_size=50_000_000):
+        return _LocalWebSocket(url, max_size=max_size)
+
+
+websockets = _WebSocketsCompat()
 
 DECKY_PORT = int(os.environ.get("DECKY_PORT", "1337"))   # Decky Loader HTTP/WS
 CEF_PORT = int(os.environ.get("CEF_PORT", "8080"))       # Steam CEF debug port
