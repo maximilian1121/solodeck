@@ -1,20 +1,14 @@
 import {
-    Field,
     Focusable,
     NavEntryPositionPreferences,
     PanelSection,
     PanelSectionRow,
     SliderField,
     ButtonItem,
-    showModal,
     showContextMenu,
     staticClasses,
 } from "@decky/ui";
-import {
-    getTrackMetadata,
-    playWebApiTrackInContext,
-    type SpotifyBrowseItem,
-} from "../api";
+import { type SpotifyBrowseItem } from "../api";
 import {
     FaCheckCircle,
     FaCircle,
@@ -24,43 +18,29 @@ import {
     FaRedo,
     FaStepBackward,
     FaStepForward,
-    FaVolumeUp,
 } from "react-icons/fa";
-import { useEffect, useRef, useState, type ReactNode } from "react";
-import TrackDetailsFocusable, { type TrackItem } from "./TrackDetailsFocusable";
-import { updatePlaybackSnapshot } from "./playbackSnapshot";
-import SpotifyLibraryModal, { TrackContextMenu } from "./SpotifyLibraryModal";
+import { useEffect, useRef, useState } from "react";
+import type { TrackItem } from "./TrackDetailsFocusable";
+import { updatePlaybackProgress, updatePlaybackSnapshot } from "./playbackSnapshot";
+import { TrackContextMenu } from "./library/TrackContextMenu";
+import {
+    ActionControl,
+    getObject,
+    isSpotifyDjContext,
+    SmoothSeekSlider,
+    spotifyContextUri,
+    spotifyTrackAlbumUri,
+} from "./playback";
+import { openSpotifyLibraryPage } from "./spotifyLibraryNavigation";
+import { QueueSection, type QueueEntry } from "./qam/QueueSection";
+import { NowPlayingSection } from "./qam/NowPlayingSection";
+import { useTrackMetadata } from "./qam/useTrackMetadata";
 
 const SOLOIST_WS_URL = "ws://127.0.0.1:35797";
 // Background refresh: poll soloist's playback/queue state every 5 seconds
 // independent of user interaction so the QAM stays in sync while idle.
 const STATE_REFRESH_INTERVAL_MS = 5_000;
 const ACTION_SETTLE_TIMEOUT_MS = 1500;
-const METADATA_CACHE_MAX_ENTRIES = 500;
-const METADATA_CACHE_TTL_MS = 30 * 60_000;
-const METADATA_CACHE_CLEANUP_INTERVAL_MS = 5 * 60_000;
-
-type CachedTrackMetadata = {
-    item: TrackItem;
-    cachedAt: number;
-};
-
-const sectionHeadingStyle = {
-    fontSize: "14px",
-    fontWeight: 600,
-    lineHeight: 1.3,
-    paddingBottom: "10px",
-} as const;
-
-const quietMessageStyle = {
-    width: "100%",
-    boxSizing: "border-box" as const,
-    color: "var(--gpColor-Grey)",
-    fontSize: "13px",
-    lineHeight: 1.4,
-    padding: "8px 12px",
-} as const;
-
 type PlaybackValues = {
     playing: boolean;
     shuffle: boolean;
@@ -73,219 +53,11 @@ type PendingPlaybackUpdates = {
     repeat?: { value: string; timer: number };
 };
 
-type QueueEntry = {
-    uid?: string;
-    source?: string;
-    item: TrackItem;
-};
-
 type PositionAnchor = {
     positionMs: number;
     timestampMs: number;
     speed: number;
 };
-
-type ActionControlProps = {
-    id: string;
-    label: string;
-    icon: ReactNode;
-    focused: boolean;
-    active?: boolean;
-    preferredFocus?: boolean;
-    onFocusChange: (focused: boolean) => void;
-    onActivate: () => void;
-};
-
-function ActionControl({
-    id,
-    label,
-    icon,
-    focused,
-    active = false,
-    preferredFocus = false,
-    onFocusChange,
-    onActivate,
-}: ActionControlProps) {
-    return (
-        <div
-            style={{
-                boxSizing: "border-box",
-                width: "48px",
-                height: "48px",
-                minWidth: "48px",
-                minHeight: "48px",
-                flex: "0 0 48px",
-                padding: 0,
-            }}
-        >
-            <Field
-                key={id}
-                focusable
-                highlightOnFocus={false}
-                preferredFocus={preferredFocus}
-                padding="none"
-                childrenLayout="below"
-                spacingBetweenLabelAndChild="none"
-                onGamepadFocus={() => onFocusChange(true)}
-                onGamepadBlur={() => onFocusChange(false)}
-                onClick={onActivate}
-            >
-                <div
-                    role="img"
-                    aria-label={label}
-                    style={{
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        flexDirection: "column",
-                        gap: "3px",
-                        boxSizing: "border-box",
-                        width: "48px",
-                        height: "48px",
-                        borderRadius: "8px",
-                        color: active ? "#1ed760" : "inherit",
-                        background: focused
-                            ? "rgba(255, 255, 255, 0.16)"
-                            : "transparent",
-                        outline: "none",
-                    }}
-                >
-                    {icon}
-                    {active && (
-                        <span
-                            aria-hidden="true"
-                            style={{
-                                background: "#1ed760",
-                                borderRadius: "50%",
-                                height: "4px",
-                                width: "4px",
-                            }}
-                        />
-                    )}
-                </div>
-            </Field>
-        </div>
-    );
-}
-
-function getObject(value: unknown): Record<string, unknown> | null {
-    return value !== null && typeof value === "object"
-        ? (value as Record<string, unknown>)
-        : null;
-}
-
-function isSpotifyDjContext(context: unknown): boolean {
-    const contextObject = getObject(context);
-    if (!contextObject) return false;
-
-    const decorations = getObject(contextObject.decorations);
-    const identity = getObject(decorations?.identity);
-    const uri = typeof contextObject.uri === "string" ? contextObject.uri : "";
-    const entityType =
-        typeof contextObject.entity_type === "string"
-            ? contextObject.entity_type
-            : "";
-    const name = typeof identity?.name === "string" ? identity.name.trim() : "";
-
-    return (
-        entityType.toLowerCase() === "dj" ||
-        /^(?:spotify\s+)?dj$/i.test(name) ||
-        /^spotify:dj(?::|$)/i.test(uri)
-    );
-}
-
-function spotifyContextUri(context: unknown): string | null {
-    const uri = getObject(context)?.uri;
-    return typeof uri === "string" && uri.length > 0 ? uri : null;
-}
-
-function spotifyTrackAlbumUri(item: TrackItem | null): string | null {
-    const uri = item?.decorations?.parent?.entity?.uri;
-    return typeof uri === "string" && uri.length > 0 ? uri : null;
-}
-
-function formatTime(milliseconds: number): string {
-    const totalSeconds = Math.floor(Math.max(0, milliseconds) / 1000);
-    const minutes = Math.floor(totalSeconds / 60);
-    const seconds = totalSeconds % 60;
-    return `${minutes}:${seconds.toString().padStart(2, "0")}`;
-}
-
-function SmoothSeekSlider({
-    positionMs,
-    durationMs,
-    onChange,
-}: {
-    positionMs: number;
-    durationMs: number;
-    onChange: (positionMs: number) => void;
-}) {
-    const [displayPosition, setDisplayPosition] = useState(positionMs);
-    const [focused, setFocused] = useState(false);
-    const displayPositionRef = useRef(positionMs);
-
-    useEffect(() => {
-        const start = displayPositionRef.current;
-        const distance = positionMs - start;
-        if (Math.abs(distance) < 1) return;
-
-        if (focused) {
-            displayPositionRef.current = positionMs;
-            setDisplayPosition(positionMs);
-            return;
-        }
-
-        const duration = 220;
-        let frame = 0;
-        let startTime: number | undefined;
-
-        const animate = (now: number) => {
-            startTime ??= now;
-            const progress = Math.min(1, (now - startTime) / duration);
-            const easedProgress =
-                progress < 0.5
-                    ? 4 * progress * progress * progress
-                    : 1 - Math.pow(-2 * progress + 2, 3) / 2;
-            const nextPosition = start + distance * easedProgress;
-            displayPositionRef.current = nextPosition;
-            setDisplayPosition(nextPosition);
-
-            if (progress < 1) frame = window.requestAnimationFrame(animate);
-        };
-
-        if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
-            displayPositionRef.current = positionMs;
-            setDisplayPosition(positionMs);
-        } else {
-            frame = window.requestAnimationFrame(animate);
-        }
-
-        return () => window.cancelAnimationFrame(frame);
-    }, [focused, positionMs]);
-
-    const handleChange = (nextPositionMs: number) => {
-        displayPositionRef.current = nextPositionMs;
-        setDisplayPosition(nextPositionMs);
-        onChange(nextPositionMs);
-    };
-
-    return (
-        <div
-            onFocusCapture={() => setFocused(true)}
-            onBlurCapture={() => setFocused(false)}
-        >
-            <SliderField
-                label={`${formatTime(displayPosition)} / ${formatTime(durationMs)}`}
-                value={displayPosition}
-                min={0}
-                max={durationMs}
-                step={1000}
-                showValue={false}
-                onChange={handleChange}
-            />
-        </div>
-    );
-}
 
 export default function QamPanel() {
     const socketRef = useRef<WebSocket | null>(null);
@@ -293,12 +65,6 @@ export default function QamPanel() {
     const upcomingRef = useRef<QueueEntry[]>([]);
     const promotionTimerRef = useRef<number | undefined>(undefined);
     const promotingUriRef = useRef<string | null>(null);
-    const metadataByUriRef = useRef(new Map<string, CachedTrackMetadata>());
-    const metadataRequestsRef = useRef(
-        new Map<string, Promise<TrackItem | null>>(),
-    );
-    const metadataRetryAtRef = useRef(new Map<string, number>());
-    const metadataAttemptAtRef = useRef(new Map<string, number>());
     const positionAnchorRef = useRef<PositionAnchor | null>(null);
     const durationRef = useRef(0);
     const seekingRef = useRef(false);
@@ -308,9 +74,6 @@ export default function QamPanel() {
     const currentTrackUriRef = useRef<string | null>(null);
     const [trackDetails, setTrackDetails] = useState<TrackItem | null>(null);
     const [upcoming, setUpcoming] = useState<QueueEntry[]>([]);
-    const [metadataTriedUris, setMetadataTriedUris] = useState<Set<string>>(
-        () => new Set(),
-    );
     const [promotingUri, setPromotingUri] = useState<string | null>(null);
     const [promotingEntry, setPromotingEntry] = useState<QueueEntry | null>(
         null,
@@ -333,33 +96,30 @@ export default function QamPanel() {
     const [connectionStatus, setConnectionStatus] = useState(
         "Connecting to Soloist...",
     );
+    const {
+        canDisplayTrack,
+        withCachedMetadata,
+        requestTrackMetadata,
+        clearMetadataCaches,
+    } = useTrackMetadata({
+        currentTrackUriRef,
+        upcomingRef,
+        promotingUriRef,
+        durationRef,
+        setTrackDetails,
+        setUpcoming,
+        setPromotingEntry,
+        setDurationMs,
+    });
 
-    const hasUsefulTrackMetadata = (item: TrackItem): boolean => {
-        const title = (
-            item.decorations?.identity?.name ??
-            item.name ??
-            ""
-        ).trim();
-        const uriId = item.uri?.trim().split(":").pop();
-        const fallbackLabel =
-            /^(?:track|episode|item)\s+\S+$/i.test(title) &&
-            (!uriId || title.toLowerCase() === `track ${uriId.toLowerCase()}`);
-        return Boolean(
-            title &&
-            title.toLowerCase() !== "unknown" &&
-            title !== item.uri &&
-            !title.startsWith("spotify:") &&
-            !fallbackLabel &&
-            title !== uriId,
-        );
-    };
-
-    const canDisplayTrack = (item: TrackItem): boolean =>
-        hasUsefulTrackMetadata(item) ||
-        Boolean(item.uri && metadataTriedUris.has(item.uri));
-
-    const withCachedMetadata = (item: TrackItem): TrackItem =>
-        metadataByUriRef.current.get(item.uri ?? "")?.item ?? item;
+    useEffect(() => {
+        updatePlaybackProgress({
+            positionMs,
+            durationMs,
+            isPlaying,
+            timestampMs: Date.now(),
+        });
+    }, [positionMs, durationMs, isPlaying]);
 
     const markTrackPromotion = (item: TrackItem | null) => {
         const uri = item?.uri;
@@ -388,148 +148,8 @@ export default function QamPanel() {
         }, 480);
     };
 
-    const requestTrackMetadata = (item: TrackItem | null) => {
-        const uri = item?.uri;
-        if (!item || !uri || hasUsefulTrackMetadata(item)) return;
-
-        if (metadataByUriRef.current.has(uri)) return;
-        if (metadataRequestsRef.current.has(uri)) return;
-        if ((metadataRetryAtRef.current.get(uri) ?? 0) > Date.now()) return;
-
-        const request = getTrackMetadata(uri);
-        metadataRequestsRef.current.set(uri, request);
-        request
-            .then((metadata) => {
-                if (!metadata) return;
-                metadataByUriRef.current.delete(uri);
-                metadataByUriRef.current.set(uri, {
-                    item: metadata,
-                    cachedAt: Date.now(),
-                });
-                const albumUri = spotifyTrackAlbumUri(metadata);
-                if (currentTrackUriRef.current === uri && albumUri) {
-                    updatePlaybackSnapshot({
-                        currentTrackAlbumUri: albumUri,
-                    });
-                }
-                const metadataDuration = getObject(
-                    getObject(metadata.decorations)?.playback,
-                )?.duration_ms;
-                if (
-                    typeof metadataDuration === "number" &&
-                    metadataDuration > 0 &&
-                    currentTrackUriRef.current === uri
-                ) {
-                    durationRef.current = metadataDuration;
-                    setDurationMs(metadataDuration);
-                }
-                if (
-                    metadataByUriRef.current.size > METADATA_CACHE_MAX_ENTRIES
-                ) {
-                    const oldestUri = metadataByUriRef.current
-                        .keys()
-                        .next().value;
-                    if (oldestUri) metadataByUriRef.current.delete(oldestUri);
-                }
-                metadataRetryAtRef.current.delete(uri);
-                setTrackDetails((current) =>
-                    current?.uri === uri && !hasUsefulTrackMetadata(current)
-                        ? metadata
-                        : current,
-                );
-                setPromotingEntry((current) =>
-                    current?.item.uri === uri
-                        ? { ...current, item: metadata }
-                        : current,
-                );
-                setUpcoming((current) =>
-                    current.map((entry) =>
-                        entry.item.uri === uri &&
-                        !hasUsefulTrackMetadata(entry.item)
-                            ? { ...entry, item: metadata }
-                            : entry,
-                    ),
-                );
-            })
-            .catch((error) => {
-                metadataRetryAtRef.current.set(uri, Date.now() + 60_000);
-                if (metadataRetryAtRef.current.size > 500) {
-                    const oldestUri = metadataRetryAtRef.current
-                        .keys()
-                        .next().value;
-                    if (oldestUri) metadataRetryAtRef.current.delete(oldestUri);
-                }
-                console.warn(
-                    `solodeck: Spotify metadata lookup failed for ${uri}`,
-                    error,
-                );
-            })
-            .then(() => {
-                metadataAttemptAtRef.current.delete(uri);
-                metadataAttemptAtRef.current.set(uri, Date.now());
-                const evictedUris: string[] = [];
-                while (
-                    metadataAttemptAtRef.current.size >
-                    METADATA_CACHE_MAX_ENTRIES
-                ) {
-                    const oldestUri = metadataAttemptAtRef.current
-                        .keys()
-                        .next().value;
-                    if (!oldestUri) break;
-                    metadataAttemptAtRef.current.delete(oldestUri);
-                    evictedUris.push(oldestUri);
-                }
-                setMetadataTriedUris((current) => {
-                    const next = new Set(current);
-                    next.add(uri);
-                    evictedUris.forEach((evictedUri) =>
-                        next.delete(evictedUri),
-                    );
-                    while (next.size > METADATA_CACHE_MAX_ENTRIES) {
-                        const oldestUri = next.values().next().value;
-                        if (!oldestUri) break;
-                        next.delete(oldestUri);
-                    }
-                    return next;
-                });
-            })
-            .finally(() => {
-                if (metadataRequestsRef.current.get(uri) === request)
-                    metadataRequestsRef.current.delete(uri);
-            });
-    };
-
     const openSpotifyLibrary = (initialBrowseItem?: SpotifyBrowseItem) => {
-        let modal: ReturnType<typeof showModal>;
-        modal = showModal(
-            <SpotifyLibraryModal
-                closeModal={() => modal.Close()}
-                initialBrowseItem={initialBrowseItem}
-                onPlayTrack={async (item, contextUri, position) => {
-                    if (!item.uri) {
-                        return {
-                            ok: false,
-                            error: "This Spotify item cannot be played.",
-                        };
-                    }
-                    if (contextUri && position !== undefined) {
-                        return playWebApiTrackInContext(
-                            contextUri,
-                            item.uri,
-                            position,
-                        );
-                    }
-                    return sendCommand("play", { uri: item.uri })
-                        ? { ok: true }
-                        : {
-                              ok: false,
-                              error: "Soloist connection is unavailable.",
-                          };
-                }}
-            />,
-            window,
-            { strTitle: "solodeck", bNeverPopOut: true },
-        );
+        openSpotifyLibraryPage(initialBrowseItem);
     };
 
     const openTrackContextMenu = (
@@ -584,57 +204,6 @@ export default function QamPanel() {
             event.currentTarget as HTMLElement,
         );
     };
-
-    useEffect(() => {
-        const cleanupMetadataCaches = () => {
-            const now = Date.now();
-            const activeUris = new Set<string>();
-            if (currentTrackUriRef.current)
-                activeUris.add(currentTrackUriRef.current);
-            if (promotingUriRef.current)
-                activeUris.add(promotingUriRef.current);
-            upcomingRef.current.forEach((entry) => {
-                if (entry.item.uri) activeUris.add(entry.item.uri);
-            });
-
-            for (const [uri, cached] of metadataByUriRef.current) {
-                if (
-                    !activeUris.has(uri) &&
-                    now - cached.cachedAt > METADATA_CACHE_TTL_MS
-                ) {
-                    metadataByUriRef.current.delete(uri);
-                }
-            }
-
-            for (const [uri, retryAt] of metadataRetryAtRef.current) {
-                if (retryAt <= now) metadataRetryAtRef.current.delete(uri);
-            }
-
-            const expiredAttempts = new Set<string>();
-            for (const [uri, attemptedAt] of metadataAttemptAtRef.current) {
-                if (
-                    !activeUris.has(uri) &&
-                    now - attemptedAt > METADATA_CACHE_TTL_MS
-                ) {
-                    metadataAttemptAtRef.current.delete(uri);
-                    expiredAttempts.add(uri);
-                }
-            }
-            if (expiredAttempts.size > 0) {
-                setMetadataTriedUris((current) => {
-                    const next = new Set(current);
-                    expiredAttempts.forEach((uri) => next.delete(uri));
-                    return next;
-                });
-            }
-        };
-
-        const cleanupTimer = window.setInterval(
-            cleanupMetadataCaches,
-            METADATA_CACHE_CLEANUP_INTERVAL_MS,
-        );
-        return () => window.clearInterval(cleanupTimer);
-    }, []);
 
     const sendCommand = (
         command: string,
@@ -914,10 +483,7 @@ export default function QamPanel() {
                         setDurationMs(0);
                         upcomingRef.current = [];
                         setUpcoming([]);
-                        setMetadataTriedUris(new Set());
-                        metadataByUriRef.current.clear();
-                        metadataRetryAtRef.current.clear();
-                        metadataAttemptAtRef.current.clear();
+                        clearMetadataCaches();
                         setPromotingUri(null);
                         setPromotingEntry(null);
                         promotingUriRef.current = null;
@@ -926,7 +492,9 @@ export default function QamPanel() {
                             currentTrackUri: null,
                             currentTrackAlbumUri: null,
                             contextUri: null,
+                            currentTrack: null,
                         });
+                        updatePlaybackProgress({ positionMs: 0, durationMs: 0, isPlaying: false, timestampMs: Date.now() });
                     } else if (data.type === "playback_state") {
                         if (typeof data.is_active === "boolean") {
                             setSoloistIsActive(data.is_active);
@@ -1001,6 +569,7 @@ export default function QamPanel() {
                             currentTrackAlbumUri:
                                 spotifyTrackAlbumUri(resolvedItem),
                             contextUri: spotifyContextUri(data.context),
+                            currentTrack: resolvedItem,
                         });
                     } else if (data.type === "device_changed") {
                         if (typeof data.device_name === "string") {
@@ -1253,74 +822,20 @@ export default function QamPanel() {
             </div>
             <div ref={panelBodyRef} style={{ paddingTop: "16px" }}>
                 <PanelSection>
-                    <PanelSectionRow>
-                        <div style={{ width: "100%" }}>
-                            <div style={sectionHeadingStyle}>
-                                Now Playing{isDjPlayback ? " • DJ" : ""}
-                            </div>
-                            {isLoggedIn && soloistDeviceName && (
-                                <Focusable
-                                    onActivate={handleActivateSoloist}
-                                    onFocus={() =>
-                                        setDeviceControlFocused(true)
-                                    }
-                                    onBlur={() =>
-                                        setDeviceControlFocused(false)
-                                    }
-                                    style={{
-                                        background: deviceControlFocused
-                                            ? "rgba(255, 255, 255, 0.16)"
-                                            : "transparent",
-                                        borderRadius: "4px",
-                                        display: "inline-flex",
-                                        maxWidth: "100%",
-                                        padding: "4px 6px",
-                                        width: "fit-content",
-                                    }}
-                                >
-                                    <div
-                                        style={{
-                                            alignItems: "center",
-                                            color: "#1ed760",
-                                            display: "flex",
-                                            fontSize: "13px",
-                                            gap: "6px",
-                                            lineHeight: 1.3,
-                                            width: "fit-content",
-                                        }}
-                                    >
-                                        <FaVolumeUp aria-hidden="true" />
-                                        <span>
-                                            {soloistIsActive
-                                                ? `Playing on ${soloistDeviceName}`
-                                                : `Switch playback to ${soloistDeviceName}`}
-                                        </span>
-                                    </div>
-                                </Focusable>
-                            )}
-                        </div>
-                    </PanelSectionRow>
-                    {trackDetails && canDisplayTrack(trackDetails) ? (
-                        <PanelSectionRow
-                            key={trackDetails.uri ?? "current-track"}
-                        >
-                            <TrackDetailsFocusable
-                                item={trackDetails}
-                                animateIn
-                                onSecondaryButton={(event) =>
-                                    openTrackContextMenu(trackDetails, event)
-                                }
-                            />
-                        </PanelSectionRow>
-                    ) : (
-                        <PanelSectionRow>
-                            <div style={quietMessageStyle}>
-                                {trackDetails
-                                    ? "Checking track details..."
-                                    : "No track details available."}
-                            </div>
-                        </PanelSectionRow>
-                    )}
+                    <NowPlayingSection
+                        isDjPlayback={isDjPlayback}
+                        isLoggedIn={isLoggedIn}
+                        soloistDeviceName={soloistDeviceName}
+                        soloistIsActive={soloistIsActive}
+                        deviceControlFocused={deviceControlFocused}
+                        onActivateSoloist={handleActivateSoloist}
+                        onDeviceFocusChange={setDeviceControlFocused}
+                        trackDetails={trackDetails}
+                        canDisplayTrack={canDisplayTrack}
+                        onTrackContextMenu={(event) =>
+                            trackDetails && openTrackContextMenu(trackDetails, event)
+                        }
+                    />
                     {isLoggedIn && durationMs > 0 && (
                         <PanelSectionRow>
                             <div onFocusCapture={scrollPanelToTop}>
@@ -1531,71 +1046,15 @@ export default function QamPanel() {
                             </div>
                         </PanelSectionRow>
                     )}
-                    {!isDjPlayback && repeatMode !== "track" && (
-                        <>
-                            <PanelSectionRow>
-                                <div style={sectionHeadingStyle}>Up Next</div>
-                            </PanelSectionRow>
-                            {promotingEntry &&
-                                promotingUri === promotingEntry.item.uri &&
-                                canDisplayTrack(promotingEntry.item) && (
-                                    <PanelSectionRow
-                                        key={`promoting-${promotingEntry.uid ?? promotingUri}`}
-                                    >
-                                        <TrackDetailsFocusable
-                                            item={promotingEntry.item}
-                                            mode="small"
-                                            promoting
-                                            onSecondaryButton={(event) =>
-                                                openTrackContextMenu(
-                                                    promotingEntry.item,
-                                                    event,
-                                                )
-                                            }
-                                        />
-                                    </PanelSectionRow>
-                                )}
-                            {upcoming.some((entry) =>
-                                canDisplayTrack(entry.item),
-                            ) ||
-                            (promotingEntry &&
-                                promotingUri === promotingEntry.item.uri &&
-                                canDisplayTrack(promotingEntry.item)) ? (
-                                upcoming
-                                    .filter((entry) =>
-                                        canDisplayTrack(entry.item),
-                                    )
-                                    .map((entry, index) => (
-                                        <PanelSectionRow
-                                            key={
-                                                entry.uid ??
-                                                entry.item.uri ??
-                                                index
-                                            }
-                                        >
-                                            <TrackDetailsFocusable
-                                                item={entry.item}
-                                                mode="small"
-                                                onSecondaryButton={(event) =>
-                                                    openTrackContextMenu(
-                                                        entry.item,
-                                                        event,
-                                                    )
-                                                }
-                                            />
-                                        </PanelSectionRow>
-                                    ))
-                            ) : (
-                                <PanelSectionRow>
-                                    <div style={quietMessageStyle}>
-                                        {upcoming.length > 0
-                                            ? "Checking track details..."
-                                            : "Queue is empty."}
-                                    </div>
-                                </PanelSectionRow>
-                            )}
-                        </>
-                    )}
+                    <QueueSection
+                        isDjPlayback={isDjPlayback}
+                        repeatMode={repeatMode}
+                        promotingEntry={promotingEntry}
+                        promotingUri={promotingUri}
+                        upcoming={upcoming}
+                        canDisplayTrack={canDisplayTrack}
+                        onOpenTrackContextMenu={openTrackContextMenu}
+                    />
                     <PanelSectionRow>
                         <ButtonItem
                             layout="below"

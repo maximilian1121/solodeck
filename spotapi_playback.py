@@ -4,6 +4,7 @@ import asyncio
 import traceback
 
 from spotapi import AsyncClient, Catalogue, Player
+from spotapi.lyrics import LyricsClient
 
 import decky
 
@@ -130,6 +131,65 @@ class SpotAPIPlaybackMixin:
             await self._teardown_player_entry(entry)
             decky.logger.info("Persistent SpotAPI player torn down")
 
+    async def play_spotify_track(self, track_uri: str) -> dict:
+        """Play a standalone track on the configured Soloist device."""
+        if not _spotify_uri_id(track_uri, "track"):
+            return {"ok": False, "error": "Invalid Spotify track."}
+
+        try:
+            settings = self._load_settings()
+            device_name = settings.get("device_name", "").strip().casefold()
+            if not device_name:
+                return {"ok": False, "error": "Set a Soloist device name first."}
+            cookie = await self._spotify_cookie()
+            if not cookie:
+                return {"ok": False, "error": "Connect your Spotify account first."}
+            player, _client = await self._get_or_create_player(cookie)
+            matching_devices = [
+                device
+                for device in player.devices
+                if isinstance(getattr(device, "name", None), str)
+                and device.name.strip().casefold() == device_name
+            ]
+            if not matching_devices:
+                return {
+                    "ok": False,
+                    "error": "Could not find the Soloist Spotify device. Make sure it is running and connected.",
+                }
+            if len(matching_devices) > 1:
+                return {
+                    "ok": False,
+                    "error": "More than one Spotify device has the Soloist name. Give Soloist a unique name and try again.",
+                }
+
+            player.select(matching_devices[0])
+            await player.command(
+                "play",
+                wait=False,
+                context={
+                    "uri": track_uri,
+                    "url": "context://" + track_uri,
+                    "metadata": {},
+                },
+                play_origin={
+                    "feature_identifier": "spotapi",
+                    "referrer_identifier": "spotapi",
+                },
+                options={"initially_paused": False, "seek_to": 0},
+            )
+            return {"ok": True}
+        except Exception as error:
+            self._spotapi_log_failure("track playback", error)
+            if isinstance(error, (RuntimeError, TimeoutError)):
+                try:
+                    await self._reset_player()
+                except Exception:
+                    pass
+            return {
+                "ok": False,
+                "error": "Could not start this track. Check that Spotify is connected and try again.",
+            }
+
     async def play_web_api_track_in_context(
         self, context_uri: str, track_uri: str, position: int
     ) -> dict:
@@ -243,3 +303,28 @@ class SpotAPIPlaybackMixin:
         finally:
             if client is not None:
                 await client.close()
+
+    async def get_spotify_lyrics(self, uri: str) -> dict:
+        """Return Spotify's available timed lyrics for the active track."""
+        if not _spotify_uri_id(uri, "track"):
+            return {"ok": False, "error": "Lyrics are only available for tracks."}
+        try:
+            async with self._spotapi_catalogue() as (client, _):
+                lyrics = await LyricsClient(client).get(uri)
+            return {
+                "ok": True,
+                "sync_type": lyrics.sync_type,
+                "language": lyrics.language,
+                "is_rtl": lyrics.is_rtl,
+                "lines": [
+                    {
+                        "start_time_ms": line.start_time_ms,
+                        "end_time_ms": line.end_time_ms,
+                        "words": line.words,
+                    }
+                    for line in lyrics.lines
+                ],
+            }
+        except Exception as error:
+            self._spotapi_log_failure("lyrics", error)
+            return {"ok": False, "error": "Lyrics are unavailable for this track."}

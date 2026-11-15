@@ -135,7 +135,7 @@ with zipfile.ZipFile(zip_filename, "w") as file:
     #    single top-level folder inside the zip, e.g. "solodeck/plugin.json".
     #    This mirrors the layout produced by the official decky CLI.
     files_needed = [
-        'package.json', 'plugin.json', 'main.py', 'spotapi_adapter.py', 'spotapi_playback.py', 'spotapi_browser_login.py', 'spotify_password_store.py', 'README.md', 'LICENSE', 'LICENSE.md'
+        'package.json', 'plugin.json', 'main.py', 'spotapi_adapter.py', 'spotapi_playback.py', 'spotify_paste_server.py', 'spotapi_browser_login.py', 'spotify_password_store.py', 'README.md', 'LICENSE', 'LICENSE.md'
     ]
     for filename in files_needed:
         if not os.path.exists(filename):

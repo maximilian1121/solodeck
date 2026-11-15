@@ -4,6 +4,8 @@ import { useEffect, useRef, useState, type CSSProperties } from "react";
 type TrackCover = {
     url: string;
     size?: string;
+    width?: number;
+    height?: number;
 };
 
 export type TrackItem = {

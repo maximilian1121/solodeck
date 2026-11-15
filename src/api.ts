@@ -19,6 +19,7 @@ export type SpotifyBrowseItem = {
     name: string;
     entity_type: "playlist" | "artist" | "album" | "home";
     image_url: string | null;
+    creators?: { name: string; uri?: string }[];
     icon?: string;
 };
 
@@ -121,6 +122,15 @@ export const saveDeviceName = callable<[device_name: string], ActionResult>(
 export const getTrackMetadata = callable<[uri: string], TrackItem | null>(
     "get_track_metadata",
 );
+export type SpotifyLyrics = {
+    ok: boolean;
+    error?: string;
+    sync_type?: string;
+    language?: string;
+    is_rtl?: boolean;
+    lines?: { start_time_ms: number; end_time_ms: number | null; words: string }[];
+};
+export const getSpotifyLyrics = callable<[uri: string], SpotifyLyrics>("get_spotify_lyrics");
 export const getWebApiLibrary = callable<[], SpotifyLibrary>(
     "get_web_api_library",
 );
@@ -159,6 +169,9 @@ export const playWebApiTrackInContext = callable<
     [contextUri: string, trackUri: string, position: number],
     ActionResult
 >("play_web_api_track_in_context");
+export const playSpotifyTrack = callable<[trackUri: string], ActionResult>(
+    "play_spotify_track",
+);
 
 export const startPairing = callable<[api_key: string], ActionResult>(
     "start_pairing",

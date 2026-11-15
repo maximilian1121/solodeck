@@ -13,17 +13,38 @@ def _sources(obj):
 
 
 def _image(value):
-    """Get the first available image from Spotify's various model shapes."""
+    """Get the largest available image from Spotify's various model shapes."""
     if value is None:
         return None
-    artwork = getattr(value, "cover_art", None) or getattr(value, "avatar_image", None)
     visuals = getattr(value, "visuals", None)
-    artwork = artwork or getattr(visuals, "avatar_image", None)
     images = getattr(value, "images", None)
     items = getattr(images, "items", None) or []
-    artwork = artwork or (items[0] if items else None)
-    sources = _sources(artwork)
-    return getattr(sources[0], "url", None) if sources else None
+    artwork_options = [
+        getattr(value, "cover_art", None),
+        getattr(value, "avatar_image", None),
+        getattr(visuals, "avatar_image", None),
+        *items,
+    ]
+    artwork_options = [artwork for artwork in artwork_options if artwork is not None]
+    if not artwork_options:
+        return None
+    # Pathfinder commonly returns the thumbnail first. Prefer explicit pixel
+    # dimensions, using source order as a fallback when dimensions are absent.
+    sources = [
+        source
+        for artwork in artwork_options
+        for source in _sources(artwork)
+    ]
+    if not sources:
+        return None
+    return max(
+        enumerate(sources),
+        key=lambda entry: (
+            (getattr(entry[1], "width", None) or 0)
+            * (getattr(entry[1], "height", None) or 0),
+            entry[0],
+        ),
+    )[1].url
 
 
 def _raw_library_image(value):
@@ -61,6 +82,32 @@ def _library_artwork(row):
     return next((image for value in candidates if (image := _raw_library_image(value))), None)
 
 
+def _library_creators(row, kind):
+    wrapper = row.get("item", {}) if isinstance(row, dict) else {}
+    data = wrapper.get("data", {}) if isinstance(wrapper, dict) else {}
+    if not isinstance(data, dict):
+        return []
+    creators = []
+    if kind == "playlist":
+        owner = data.get("ownerV2") or data.get("owner_v2") or {}
+        owner_data = owner.get("data", owner) if isinstance(owner, dict) else {}
+        name = owner_data.get("name") if isinstance(owner_data, dict) else None
+        uri = owner_data.get("uri") if isinstance(owner_data, dict) else None
+        if isinstance(name, str) and name.strip():
+            creators.append({"name": name.strip(), "uri": uri})
+    elif kind == "album":
+        artists = data.get("artists") or []
+        if isinstance(artists, dict):
+            artists = artists.get("items", [])
+        for artist in artists if isinstance(artists, list) else []:
+            profile = artist.get("profile", {}) if isinstance(artist, dict) else {}
+            name = profile.get("name") if isinstance(profile, dict) else None
+            uri = artist.get("uri") if isinstance(artist, dict) else None
+            if isinstance(name, str) and name.strip():
+                creators.append({"name": name.strip(), "uri": uri})
+    return creators
+
+
 def format_browse(value, kind=None):
     uri = getattr(value, "uri", "") or ""
     kind = kind or (uri.split(":")[1] if uri.startswith("spotify:") else "")
@@ -68,7 +115,29 @@ def format_browse(value, kind=None):
         return None
     profile = getattr(value, "profile", None)
     name = getattr(value, "name", None) or getattr(profile, "name", "")
-    return {"uri": uri, "name": name, "entity_type": kind, "image_url": _image(value)}
+    creators = []
+    if kind == "playlist":
+        owner = getattr(getattr(value, "owner_v2", None), "data", None)
+        owner_name = getattr(owner, "name", None)
+        if isinstance(owner_name, str) and owner_name.strip():
+            creators.append({
+                "name": owner_name.strip(),
+                "uri": getattr(owner, "uri", None),
+            })
+    elif kind == "album":
+        artists = getattr(getattr(value, "artists", None), "items", None) or []
+        for artist in artists:
+            artist_profile = getattr(artist, "profile", None)
+            artist_name = getattr(artist_profile, "name", None) or getattr(artist, "name", None)
+            if isinstance(artist_name, str) and artist_name.strip():
+                creators.append({
+                    "name": artist_name.strip(),
+                    "uri": getattr(artist, "uri", None),
+                })
+    result = {"uri": uri, "name": name, "entity_type": kind, "image_url": _image(value)}
+    if creators:
+        result["creators"] = creators
+    return result
 
 
 def format_track(value, album=None):
@@ -200,6 +269,9 @@ class SpotAPIAdapterMixin:
                                     formatted = format_browse(item, item.kind)
                                     if formatted:
                                         formatted["image_url"] = _library_artwork(row)
+                                        creators = _library_creators(row, item.kind)
+                                        if creators:
+                                            formatted["creators"] = creators
                                         groups[item.kind].append(formatted)
                 return {"ok": True, "playlists": groups["playlist"], "albums": groups["album"], "artists": groups["artist"]}
         except Exception as error:
@@ -294,13 +366,13 @@ class SpotAPIAdapterMixin:
             async with self._spotapi_catalogue() as (_, catalogue):
                 if kind == "playlist":
                     operation = Operations.FETCH_PLAYLIST_CONTENTS.value
-                    variables = {"uri": resource.uri, "offset": offset, "limit": 100,
+                    variables = {"uri": resource.uri, "offset": offset, "limit": 30,
                                  "enableWatchFeedEntrypoint": False,
                                  "includeEpisodeContentRatingsV2": True}
                     path = ("playlistV2", "content")
                 else:
                     operation = Operations.QUERY_ALBUM_TRACKS.value
-                    variables = {"uri": resource.uri, "offset": offset, "limit": 100}
+                    variables = {"uri": resource.uri, "offset": offset, "limit": 30}
                     path = ("albumUnion", "tracksV2")
 
                 async def fetch_page():
@@ -310,7 +382,22 @@ class SpotAPIAdapterMixin:
                         return await anext(pages, {"items": []})
 
                 if kind == "album":
-                    page, album = await asyncio.gather(fetch_page(), catalogue.get_album(resource.uri))
+                    async def get_album_metadata():
+                        try:
+                            return await catalogue.get_album(resource.uri)
+                        except Exception as error:
+                            # Album identity is already available to the UI. A
+                            # metadata enrichment failure must not hide tracks.
+                            import decky
+
+                            decky.logger.warning(
+                                f"Spotify album metadata enrichment failed ({type(error).__name__})"
+                            )
+                            return None
+
+                    page, album = await asyncio.gather(
+                        fetch_page(), get_album_metadata()
+                    )
                 else:
                     page, album = await fetch_page(), None
                 rows = page.get("items")
@@ -333,10 +420,15 @@ class SpotAPIAdapterMixin:
                 if isinstance(paging, dict) and "nextOffset" in paging:
                     candidate = paging["nextOffset"]
                     next_offset = candidate if type(candidate) is int and candidate > offset else None
-                elif not rows or (type(total) is int and next_offset >= total) or (total is None and len(rows) < 100):
+                elif not rows or (type(total) is int and next_offset >= total) or (total is None and len(rows) < 30):
                     next_offset = None
                 return {"ok": True, "items": items, "next_offset": next_offset}
         except Exception as error:
+            import decky
+
+            decky.logger.warning(
+                f"Spotify {kind} track page failed at offset {offset} ({type(error).__name__})"
+            )
             return {"ok": False, "error": self._spotapi_error(error)}
 
     async def get_spotify_playlist_page(self, uri, offset=0):

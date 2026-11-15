@@ -216,7 +216,11 @@ class DeckyClient:
         try:
             reply = await asyncio.wait_for(future, timeout)
         except asyncio.TimeoutError:
-            raise RuntimeError(f"{route} timed out")
+            self._pending.pop(call_id, None)
+            # Keep timeout type intact so install callers can distinguish a
+            # slow Decky confirmation from an explicit route failure. Decky
+            # may finish installing after the confirmation RPC times out.
+            raise asyncio.TimeoutError(f"{route} timed out") from None
         if reply["type"] == ERROR:
             raise RuntimeError(f"{route} failed: {reply.get('error')}")
         return reply.get("result")
